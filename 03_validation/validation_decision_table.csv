@@ -1,0 +1,12 @@
+model,check,metric,pass
+markov,MCMC Rhat/ESS,max Rhat 1.002; min bulk ESS 3625; min tail ESS 3619,TRUE
+pick_value,MCMC Rhat/ESS,max Rhat 1.001; min bulk ESS 3746; min tail ESS 4967,TRUE
+markov,NUTS geometry,0 divergences; 0 max-treedepth hits; min E-BFMI 0.920,TRUE
+pick_value,NUTS geometry,0 divergences; 0 max-treedepth hits; min E-BFMI 0.841,TRUE
+pick_value,PPC coverage,90% interval coverage 91.0%; max |z| 3.98,FALSE
+markov,Conjugacy / code check,max |Stan mean - closed form| 0.000815,TRUE
+markov,PPC transition stats,observed stays 303; big jumps 176,TRUE
+pick_value,PSIS-LOO,elpd_loo -3851.26; max Pareto-k 0.33,TRUE
+markov,PSIS-LOO row-level,elpd_loo -60.87; max Pareto-k 1.15,FALSE
+pick_value,SBC rank uniformity,min KS p-value Inf across monitored params,TRUE
+markov,SBC rank uniformity,min KS p-value 0.033 across theta cells,TRUE

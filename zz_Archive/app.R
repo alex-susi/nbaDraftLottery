@@ -21,6 +21,8 @@ library(DT)
 library(bslib)
 library(tidyverse)
 
+`%||%` <- function(x, y) if (is.null(x) || length(x) == 0) y else x
+
 has_igraph <- requireNamespace("igraph", quietly = TRUE)
 
 if (!file.exists("dashboard_data.rds")) {
@@ -38,6 +40,198 @@ stationary   <- dd$stationary
 tier_balls   <- dd$tier_balls
 meta         <- dd$metadata
 stan_diag    <- dd$stan_diagnostics
+
+# Per-pick objects (Single Pick & Trade Machine tabs)
+# pick_assets are the internal simulation rows. pick_display_assets are the
+# user-facing RealGM-style entitlements shown in the app. A display pick can map
+# to multiple internal rows, for example "2027 BKN own or HOU (via HOU swap for
+# BKN)" maps to BKN's retained own row plus the HOU return-leg row.
+pick_assets        <- dd$pick_assets
+pick_value_summary <- dd$pick_value_summary
+asset_cur_draws    <- dd$asset_cur_draws
+asset_new_draws    <- dd$asset_new_draws
+complex_future_groups <- dd$complex_future_groups %||% tibble()
+complex_future_assets <- dd$complex_future_assets %||% tibble()
+
+build_display_matrix_app <- function(draw_mat, display_members, display_assets) {
+  out <- matrix(
+    0,
+    nrow = nrow(draw_mat),
+    ncol = nrow(display_assets),
+    dimnames = list(NULL, display_assets$display_asset_id)
+  )
+  for (did in display_assets$display_asset_id) {
+    ids <- display_members %>%
+      filter(.data$display_asset_id == .env$did) %>%
+      pull(asset_id)
+    ids <- ids[ids %in% colnames(draw_mat)]
+    if (length(ids) == 1L) out[, did] <- draw_mat[, ids]
+    if (length(ids) > 1L) out[, did] <- rowSums(draw_mat[, ids, drop = FALSE])
+  }
+  out
+}
+
+# Important: `%||%` is not lazy in R, so fallback pipelines are evaluated even
+# when the left-hand side exists. Use explicit `if` blocks for any fallback that
+# references columns that may only exist in older/newer dashboard_data.rds files.
+
+if (!is.null(dd$pick_display_members) && nrow(dd$pick_display_members) > 0) {
+  pick_display_members <- dd$pick_display_members
+} else {
+  if (!"asset_id" %in% names(pick_assets)) {
+    stop("dashboard_data.rds is missing both pick_display_members and pick_assets$asset_id. Re-run nba_lottery.R with the display-assets export enabled.", call. = FALSE)
+  }
+  pick_display_members <- tibble(
+    display_asset_id = paste0("display_", pick_assets$asset_id),
+    asset_id = pick_assets$asset_id
+  )
+}
+
+if (!is.null(dd$pick_display_assets) && nrow(dd$pick_display_assets) > 0) {
+  pick_display_assets <- dd$pick_display_assets
+} else {
+  if (!"asset_id" %in% names(pick_assets)) {
+    stop("dashboard_data.rds is missing both pick_display_assets and pick_assets$asset_id. Re-run nba_lottery.R with the display-assets export enabled.", call. = FALSE)
+  }
+  pick_display_assets <- pick_assets %>%
+    transmute(
+      display_asset_id = paste0("display_", asset_id),
+      owner, year, label, obligation, notes,
+      group_type = "single_asset",
+      display_group = asset_id,
+      member_n = 1L,
+      member_original_teams = original_team
+    )
+}
+
+if (!is.null(dd$pick_display_value_summary) && nrow(dd$pick_display_value_summary) > 0) {
+  pick_display_value_summary <- dd$pick_display_value_summary
+} else {
+  pick_display_value_summary <- pick_display_assets %>%
+    left_join(
+      pick_display_members %>%
+        left_join(pick_value_summary, by = "asset_id") %>%
+        group_by(display_asset_id) %>%
+        summarise(
+          cur_mean = sum(cur_mean, na.rm = TRUE),
+          cur_q05 = sum(cur_q05, na.rm = TRUE),
+          cur_q50 = sum(cur_q50, na.rm = TRUE),
+          cur_q95 = sum(cur_q95, na.rm = TRUE),
+          cur_sd = sqrt(sum(cur_sd^2, na.rm = TRUE)),
+          new_mean = sum(new_mean, na.rm = TRUE),
+          new_q05 = sum(new_q05, na.rm = TRUE),
+          new_q50 = sum(new_q50, na.rm = TRUE),
+          new_q95 = sum(new_q95, na.rm = TRUE),
+          new_sd = sqrt(sum(new_sd^2, na.rm = TRUE)),
+          cur_convey_prob = max(cur_convey_prob, na.rm = TRUE),
+          new_convey_prob = max(new_convey_prob, na.rm = TRUE),
+          delta = new_mean - cur_mean,
+          .groups = "drop"
+        ),
+      by = "display_asset_id"
+    )
+}
+
+if (!is.null(dd$display_asset_cur_draws) && length(dd$display_asset_cur_draws) > 0) {
+  display_asset_cur_draws <- dd$display_asset_cur_draws
+} else {
+  display_asset_cur_draws <- build_display_matrix_app(asset_cur_draws, pick_display_members, pick_display_assets)
+}
+
+if (!is.null(dd$display_asset_new_draws) && length(dd$display_asset_new_draws) > 0) {
+  display_asset_new_draws <- dd$display_asset_new_draws
+} else {
+  display_asset_new_draws <- build_display_matrix_app(asset_new_draws, pick_display_members, pick_display_assets)
+}
+
+# Slot / raw-value / curve stores that let the Trade Machine apply HYPOTHETICAL
+# protections & swaps to a pick a user is sending (recomputed per simulation).
+asset_slot_cur_draws    <- dd$asset_slot_cur_draws
+asset_slot_new_draws    <- dd$asset_slot_new_draws
+asset_raw_cur_draws     <- dd$asset_raw_cur_draws
+asset_raw_new_draws     <- dd$asset_raw_new_draws
+asset_ownslot_cur_draws <- dd$asset_ownslot_cur_draws
+asset_ownslot_new_draws <- dd$asset_ownslot_new_draws
+if (!is.null(dd$asset_convey_cur_draws) && length(dd$asset_convey_cur_draws) > 0) {
+  asset_convey_cur_draws <- dd$asset_convey_cur_draws
+} else {
+  asset_convey_cur_draws <- 1L * (!is.na(asset_slot_cur_draws) & asset_cur_draws != 0)
+}
+
+if (!is.null(dd$asset_convey_new_draws) && length(dd$asset_convey_new_draws) > 0) {
+  asset_convey_new_draws <- dd$asset_convey_new_draws
+} else {
+  asset_convey_new_draws <- 1L * (!is.na(asset_slot_new_draws) & asset_new_draws != 0)
+}
+
+if (!is.null(dd$display_convey_cur_draws) && length(dd$display_convey_cur_draws) > 0) {
+  display_convey_cur_draws <- dd$display_convey_cur_draws
+} else {
+  display_convey_cur_draws <- build_display_matrix_app(asset_convey_cur_draws, pick_display_members, pick_display_assets)
+}
+
+if (!is.null(dd$display_convey_new_draws) && length(dd$display_convey_new_draws) > 0) {
+  display_convey_new_draws <- dd$display_convey_new_draws
+} else {
+  display_convey_new_draws <- build_display_matrix_app(asset_convey_new_draws, pick_display_members, pick_display_assets)
+}
+team_slot_cur_draws     <- dd$team_slot_cur_draws
+team_slot_new_draws     <- dd$team_slot_new_draws
+sim_curve_par_draws     <- dd$sim_curve_par_draws
+proj_years              <- dd$proj_years
+
+# value a draft slot under each kept sim's pick-value mean curve. The
+# player-level Monte Carlo uses Student-t noise in nba_lottery.R; the app uses
+# the deterministic mean here so hypothetical-protection deltas are stable.
+# Prefer the per-slot posterior mean columns written by nba_lottery.R because
+# they are robust to Stan-side changes in the mean / variance parameterization.
+slot_value_vec <- function(slot_vec) {
+  n_draws <- nrow(sim_curve_par_draws)
+  slot_vec <- as.integer(slot_vec)
+
+  # Match the old vectorized behavior: a scalar slot is valued under every kept
+  # simulation draw; a vector slot should usually already be length n_draws.
+  if (length(slot_vec) == 1L) {
+    slot_vec <- rep(slot_vec, n_draws)
+  } else if (length(slot_vec) != n_draws) {
+    slot_vec <- rep(slot_vec, length.out = n_draws)
+  }
+
+  slot_clamped <- pmin(pmax(slot_vec, 1L), 30L)
+  slot_index <- ifelse(is.na(slot_clamped), 1L, slot_clamped)
+
+  mu_cols <- paste0("mu_", 1:30)
+  if (all(mu_cols %in% colnames(sim_curve_par_draws))) {
+    mu_mat <- as.matrix(sim_curve_par_draws[, mu_cols, drop = FALSE])
+    out <- pmax(0, mu_mat[cbind(seq_len(n_draws), slot_index)])
+    out[is.na(slot_clamped)] <- NA_real_
+    return(out)
+  }
+
+  # Backward-compatible fallback for older dashboard_data.rds files.
+  a  <- sim_curve_par_draws[, "alpha"]
+  b  <- sim_curve_par_draws[, "beta"]
+  g  <- sim_curve_par_draws[, "gamma"]
+  out <- pmax(0, a / (slot_clamped ^ b) + g)
+  out[is.na(slot_clamped)] <- NA_real_
+  out
+}
+
+# Team abbreviations present in the asset registry, sorted
+all_team_abbr <- sort(unique(c(pick_display_assets$owner, pick_assets$owner, pick_assets$original_team)))
+
+# protection options offered in the Trade Machine (top-N bands; 12-15 illegal)
+protection_choices <- c(
+  "None (unprotected)" = "none",
+  "Top-1"  = "top1",  "Top-2"  = "top2",  "Top-3"  = "top3",  "Top-4"  = "top4",
+  "Top-5"  = "top5",  "Top-6"  = "top6",  "Top-8"  = "top8",
+  "Top-10" = "top10", "Lottery (top-14)" = "lottery",
+  "Top-16" = "top16", "Top-20" = "top20"
+)
+protection_floor_app <- function(p) {
+  switch(p, top1 = 1, top2 = 2, top3 = 3, top4 = 4, top5 = 5, top6 = 6,
+         top8 = 8, top10 = 10, lottery = 14, top16 = 16, top20 = 20, 0)
+}
 
 # Five 3-2-1 tiers, worst -> best
 TIERS <- meta$tiers
@@ -211,6 +405,80 @@ ui <- page_navbar(
         card_header("Model Validation"),
         uiOutput("validation_panel")
       )
+    )
+  ),
+
+  # ---- Tab 6: Single Pick Valuation ----
+  nav_panel(
+    title = "Single Pick",
+    icon  = icon("basketball"),
+    layout_sidebar(
+      sidebar = sidebar(
+        width = 270,
+        selectInput("sp_year", "Draft year",
+          choices  = sort(unique(pick_assets$year)),
+          selected = 2026),
+        selectInput("sp_asset", "Pick", choices = NULL),
+        hr(),
+        uiOutput("sp_obligation")
+      ),
+      layout_columns(
+        col_widths = c(12),
+        card(
+          card_header("Projected Pick Value: Current vs 3-2-1"),
+          uiOutput("sp_headline")
+        )
+      ),
+      card(
+        card_header("Value Distribution (4-yr Win Shares)"),
+        plotlyOutput("sp_dist", height = "330px")
+      )
+    )
+  ),
+
+  # ---- Tab 7: Trade Machine ----
+  nav_panel(
+    title = "Trade Machine",
+    icon  = icon("right-left"),
+    div(style = "padding:6px 4px 10px;",
+      checkboxInput("tm_obligations",
+        "Allow attaching protections / swap rights to picks being sent",
+        value = FALSE),
+      tags$small(style = "color:#888;",
+        "When on, each selected pick gets a protection dropdown and a ",
+        "swap-right toggle below. Protections in the 12-15 band are ",
+        "disallowed under the approved rules and are not offered.")
+    ),
+    layout_columns(
+      col_widths = c(6, 6),
+      card(
+        card_header(textOutput("tm_teamA_hdr")),
+        selectInput("tm_teamA", "Team A",
+          choices = all_team_abbr, selected = all_team_abbr[1]),
+        selectizeInput("tm_picksA", "Picks A sends out",
+          choices = NULL, multiple = TRUE,
+          options = list(placeholder = "select one or more picks")),
+        uiOutput("tm_obligA"),
+        uiOutput("tm_picksA_detail")
+      ),
+      card(
+        card_header(textOutput("tm_teamB_hdr")),
+        selectInput("tm_teamB", "Team B",
+          choices = all_team_abbr, selected = all_team_abbr[2]),
+        selectizeInput("tm_picksB", "Picks B sends out",
+          choices = NULL, multiple = TRUE,
+          options = list(placeholder = "select one or more picks")),
+        uiOutput("tm_obligB"),
+        uiOutput("tm_picksB_detail")
+      )
+    ),
+    card(
+      card_header("Trade Assessment"),
+      uiOutput("tm_verdict")
+    ),
+    card(
+      card_header("Expected Asset Edge + Realized Outcome Simulation"),
+      plotlyOutput("tm_dist", height = "300px")
     )
   ),
 
@@ -462,8 +730,21 @@ server <- function(input, output, session) {
       tags$div(sprintf("Curve: %s", pm$curve_type)),
       tags$div(sprintf("max R-hat = %.3f (want < 1.01)", pm$max_rhat)),
       tags$div(sprintf("min bulk-ESS = %s", format(pm$min_ess, big.mark = ","))),
-      tags$div(sprintf("90%% PPC slot coverage = %.0f%%", pm$ppc_cover * 100)),
+      tags$div(sprintf("90%% PPC %s coverage = %.0f%%",
+                       ifelse(is.null(pm$ppc_level), "slot", pm$ppc_level),
+                       pm$ppc_cover * 100)),
       tags$div(sprintf("alpha=%.1f beta=%.3f gamma=%.1f", pm$alpha, pm$beta, pm$gamma)),
+      if (!is.null(pm$nu)) tags$div(sprintf("Student-t nu=%.2f", pm$nu)),
+      if (!is.null(pm$tau_log_sigma_rw)) tags$div(sprintf("sigma smoothing tau=%.4f", pm$tau_log_sigma_rw)),
+      if (!is.null(pm$sigma_pick_1)) tags$div(sprintf(
+        "sigma[pick]: #1 %.2f | #5 %.2f | #10 %.2f | #30 %.2f",
+        pm$sigma_pick_1, pm$sigma_pick_5, pm$sigma_pick_10, pm$sigma_pick_30
+      )),
+      # Backward-compatible display for older dashboard_data.rds files.
+      if (is.null(pm$sigma_pick_1) && !is.null(pm$sigma_base)) tags$div(sprintf(
+        "sigma_base=%.2f | sigma_slope=%.4f", pm$sigma_base, pm$sigma_slope
+      )),
+      if (!is.null(pm$n_players)) tags$div(sprintf("player rows = %s", format(pm$n_players, big.mark = ","))),
       tags$hr(style = "border-color:#222;"),
       tags$div(tags$strong(style = "color:#6d28d9;", "Markov model")),
       tags$div(sprintf("%s transitions over %d seasons",
@@ -477,6 +758,506 @@ server <- function(input, output, session) {
         paste(sprintf("%s %.0f%%", tier_short[TIERS], stationary * 100),
               collapse = " | ")))
   })
+
+  # ==========================================================================
+  # TAB 6: SINGLE PICK VALUATION
+  # ==========================================================================
+
+  display_member_ids <- function(display_id) {
+    pick_display_members %>%
+      filter(.data$display_asset_id == .env$display_id) %>%
+      pull(asset_id) %>%
+      unique()
+  }
+
+  # populate pick choices for the chosen year
+  observeEvent(input$sp_year, {
+    opts <- pick_display_assets %>%
+      filter(year == input$sp_year) %>%
+      arrange(owner, label)
+    choice_vec <- setNames(opts$display_asset_id, opts$label)
+    updateSelectInput(session, "sp_asset", choices = choice_vec)
+  })
+
+  sp_row <- reactive({
+    req(input$sp_asset)
+    pick_display_assets %>% filter(display_asset_id == input$sp_asset)
+  })
+
+  sp_stats <- reactive({
+    req(input$sp_asset)
+    pick_display_value_summary %>% filter(display_asset_id == input$sp_asset)
+  })
+
+  output$sp_obligation <- renderUI({
+    r <- sp_row()
+    s <- sp_stats()
+    if (nrow(r) == 0) return(NULL)
+    member_ids <- display_member_ids(r$display_asset_id)
+    member_rows <- pick_assets %>% filter(asset_id %in% member_ids)
+    member_txt <- if (nrow(member_rows) > 1) {
+      sprintf("Modeled as %d internal conditional legs: %s",
+              nrow(member_rows), paste(sort(unique(member_rows$original_team)), collapse = ", "))
+    } else if (nrow(member_rows) == 1) {
+      sprintf("Underlying original pick: %s", member_rows$original_team[1])
+    } else {
+      "Underlying legs unavailable"
+    }
+    exp_pick_txt <- if (nrow(s) > 0 && "new_expected_pick_count" %in% names(s)) {
+      sprintf("Expected pick count: current %.2f | 3-2-1 %.2f",
+              s$cur_expected_pick_count, s$new_expected_pick_count)
+    } else NULL
+
+    tags$div(style = "font-size:11px; color:#aaa; line-height:1.7;",
+      tags$div(tags$strong(style = "color:#6d28d9;", "Pick details")),
+      tags$div(sprintf("Owner: %s", r$owner)),
+      tags$div(sprintf("Obligation: %s", r$obligation)),
+      tags$div(style = "color:#888;", member_txt),
+      if (!is.null(exp_pick_txt)) tags$div(style = "color:#888;", exp_pick_txt),
+      if (nrow(s) > 0 && "new_convey_prob" %in% names(s))
+        tags$div(sprintf("Modeled allocation probability: current %.0f%% | 3-2-1 %.0f%%",
+                         100 * s$cur_convey_prob, 100 * s$new_convey_prob)),
+      if (r$member_n > 1)
+        tags$div(style = "color:#f59e0b;",
+                 "Grouped display asset: mutually exclusive or ranked-pool legs are collapsed into one selectable pick."),
+      if (r$year == 2026)
+        tags$div(style = "color:#10b981;", "Locked 2026 actual first-round result"))
+  })
+
+  output$sp_headline <- renderUI({
+    s <- sp_stats()
+    if (nrow(s) == 0) return(NULL)
+    delta <- s$new_mean - s$cur_mean
+    box <- function(title, mean, q05, q95, col) {
+      tags$div(style = sprintf(
+        "flex:1; padding:12px; border:1px solid #1a1a2a; border-radius:8px; border-left:3px solid %s;", col),
+        tags$div(style = "font-size:11px; color:#888;", title),
+        tags$div(style = sprintf("font-size:26px; font-weight:700; color:%s;", col),
+                 sprintf("%.1f", mean)),
+        tags$div(style = "font-size:11px; color:#aaa;",
+                 sprintf("90%% CI: [%.1f, %.1f]", q05, q95)))
+    }
+    tags$div(style = "display:flex; gap:12px; align-items:stretch;",
+      box("Current system E[value]", s$cur_mean, s$cur_q05, s$cur_q95, "#3b82f6"),
+      box("3-2-1 system E[value]",   s$new_mean, s$new_q05, s$new_q95, "#f59e0b"),
+      tags$div(style = sprintf(
+        "flex:1; padding:12px; border:1px solid #1a1a2a; border-radius:8px; border-left:3px solid %s;",
+        ifelse(delta >= 0, "#10b981", "#ef4444")),
+        tags$div(style = "font-size:11px; color:#888;", "Delta (3-2-1 - current)"),
+        tags$div(style = sprintf("font-size:26px; font-weight:700; color:%s;",
+                                 ifelse(delta >= 0, "#10b981", "#ef4444")),
+                 sprintf("%+.1f", delta)),
+        tags$div(style = "font-size:11px; color:#aaa;", "expected 4-yr Win Shares")))
+  })
+
+  output$sp_dist <- renderPlotly({
+    req(input$sp_asset)
+    cur <- display_asset_cur_draws[, input$sp_asset]
+    new <- display_asset_new_draws[, input$sp_asset]
+    s   <- sp_stats()
+    plot_ly() %>%
+      add_histogram(x = cur, name = "Current", opacity = 0.6,
+                    marker = list(color = "#3b82f6"), nbinsx = 40) %>%
+      add_histogram(x = new, name = "3-2-1", opacity = 0.6,
+                    marker = list(color = "#f59e0b"), nbinsx = 40) %>%
+      layout(
+        barmode = "overlay",
+        paper_bgcolor = "rgba(0,0,0,0)", plot_bgcolor = "#0f0f1a",
+        font = list(family = "IBM Plex Mono", color = "#999"),
+        xaxis = list(title = "4-yr Win Shares", gridcolor = "#1a1a2a"),
+        yaxis = list(title = "Simulations", gridcolor = "#1a1a2a"),
+        legend = list(x = 0.75, y = 0.95, font = list(size = 10)),
+        shapes = list(
+          list(type = "line", x0 = s$cur_mean, x1 = s$cur_mean, y0 = 0, y1 = 1,
+               yref = "paper", line = list(color = "#3b82f6", dash = "dash")),
+          list(type = "line", x0 = s$new_mean, x1 = s$new_mean, y0 = 0, y1 = 1,
+               yref = "paper", line = list(color = "#f59e0b", dash = "dash"))))
+  })
+
+  # ==========================================================================
+  # TAB 7: TRADE MACHINE
+  # ==========================================================================
+
+  output$tm_teamA_hdr <- renderText(sprintf("Team A — %s", input$tm_teamA))
+  output$tm_teamB_hdr <- renderText(sprintf("Team B — %s", input$tm_teamB))
+
+  # picks each team currently OWNS (can send out). Use display assets so
+  # swap return legs and retained own rows appear as one RealGM-style pick.
+  picks_owned_by <- function(team) {
+    pick_display_assets %>%
+      filter(owner == team) %>%
+      arrange(year, label)
+  }
+
+  observeEvent(input$tm_teamA, {
+    opts <- picks_owned_by(input$tm_teamA)
+    updateSelectizeInput(session, "tm_picksA",
+      choices = setNames(opts$display_asset_id, opts$label), server = TRUE)
+  })
+  observeEvent(input$tm_teamB, {
+    opts <- picks_owned_by(input$tm_teamB)
+    updateSelectizeInput(session, "tm_picksB",
+      choices = setNames(opts$display_asset_id, opts$label), server = TRUE)
+  })
+
+  # ---- per-pick obligation controls (only when the toggle is on) ----
+  # For each selected pick we render a protection dropdown + a swap checkbox.
+  # Input ids are deterministic: prot_<side>_<assetid>, swap_<side>_<assetid>.
+  safe_id <- function(x) gsub("[^A-Za-z0-9]", "_", x)
+
+  obligation_controls <- function(ids, side) {
+    if (!isTRUE(input$tm_obligations) || is.null(ids) || length(ids) == 0)
+      return(NULL)
+    rows <- pick_display_assets %>% filter(display_asset_id %in% ids)
+    tags$div(style = "border-top:1px solid #1a1a2a; margin-top:8px; padding-top:8px;",
+      tags$div(style = "font-size:11px; color:#6d28d9; margin-bottom:4px;",
+               "Attach obligations to picks being sent"),
+      lapply(seq_len(nrow(rows)), function(i) {
+        r   <- rows[i, ]
+        pid <- paste0("prot_", side, "_", safe_id(r$display_asset_id))
+        sid <- paste0("swap_", side, "_", safe_id(r$display_asset_id))
+        locked <- r$year == 2026
+        grouped_existing <- isTRUE(r$member_n > 1) || !identical(r$group_type, "single_asset")
+        tags$div(style = "margin-bottom:8px; font-size:11px; color:#aaa;",
+          tags$div(tags$strong(r$label),
+            if (locked) tags$span(style = "color:#10b981;",
+                                  " (2026 locked — obligations N/A)")),
+          if (!locked && grouped_existing)
+            tags$div(style = "color:#888; margin-top:2px;",
+                     "Existing swap/ranked-pool entitlement — additional hypothetical protections/swaps are disabled for this grouped pick."),
+          if (!locked && !grouped_existing) tags$div(style = "display:flex; gap:8px; align-items:center;",
+            tags$div(style = "flex:1;",
+              selectInput(pid, NULL, choices = protection_choices,
+                          selected = "none", width = "100%")),
+            tags$div(style = "flex:1;",
+              checkboxInput(sid, "Swap right (take better slot)", value = FALSE))))
+      }))
+  }
+  output$tm_obligA <- renderUI(obligation_controls(input$tm_picksA, "A"))
+  output$tm_obligB <- renderUI(obligation_controls(input$tm_picksB, "B"))
+
+  # detail panels listing the EXISTING obligations on selected picks
+  render_pick_detail <- function(ids) {
+    if (is.null(ids) || length(ids) == 0)
+      return(tags$div(style = "font-size:11px; color:#666;", "No picks selected"))
+    rows <- pick_display_assets %>% filter(display_asset_id %in% ids)
+    tags$div(style = "font-size:11px; color:#aaa; line-height:1.6;",
+      lapply(seq_len(nrow(rows)), function(i) {
+        r <- rows[i, ]
+        pvs <- pick_display_value_summary %>% filter(display_asset_id == r$display_asset_id)
+        prob_txt <- if (nrow(pvs) > 0 && "new_convey_prob" %in% names(pvs)) {
+          sprintf(" | alloc %.0f%%", 100 * pvs$new_convey_prob)
+        } else ""
+        member_txt <- if (r$member_n > 1) sprintf(" | %d legs", r$member_n) else ""
+        tags$div(
+          tags$strong(r$label),
+          tags$span(style = "color:#888;", sprintf(" [%s%s%s]", r$obligation, prob_txt, member_txt)))
+      }))
+  }
+  output$tm_picksA_detail <- renderUI(render_pick_detail(input$tm_picksA))
+  output$tm_picksB_detail <- renderUI(render_pick_detail(input$tm_picksB))
+
+  # ---- value (per sim) of a single sent pick TO ITS RECEIVER ----
+  # The Trade Machine now keeps two distinct concepts separate:
+  #   1. Expected asset value (EV): value the pick's slot under each posterior
+  #      mean curve draw. This is the right headline trade-value metric.
+  #   2. Realized player-outcome value: use the player-level Student-t Monte
+  #      Carlo draws already stored in asset_new_draws. This captures the fact
+  #      that a later pick can still produce the better player ex post.
+  #
+  # For locked 2026 picks, EV is deterministic conditional on the posterior
+  # mean curve draw: pick #3 should beat pick #6 on expected asset value in
+  # every monotone curve draw, while outcome draws can still favor #6.
+
+  pick_conveys_app <- function(pos, protection) {
+    if (is.null(protection) || length(protection) == 0 || is.na(protection)) {
+      return(rep(TRUE, length(pos)))
+    }
+    if (protection == "none")    return(rep(TRUE, length(pos)))
+    if (protection == "top1")    return(pos > 1)
+    if (protection == "top2")    return(pos > 2)
+    if (protection == "top3")    return(pos > 3)
+    if (protection == "top4")    return(pos > 4)
+    if (protection == "top5")    return(pos > 5)
+    if (protection == "top6")    return(pos > 6)
+    if (protection == "top8")    return(pos > 8)
+    if (protection == "top10")   return(pos > 10)
+    if (protection == "lottery") return(pos > 14)
+    if (protection == "top16")   return(pos > 16)
+    if (protection == "top20")   return(pos > 20)
+    rep(TRUE, length(pos))
+  }
+
+  zero_trade_vec <- function() rep(0, nrow(asset_new_draws))
+
+  underlying_pick_ev_base <- function(aid) {
+    r <- pick_assets %>% filter(asset_id == aid)
+    if (nrow(r) == 0) return(zero_trade_vec())
+
+    if (r$year == 2026L && !is.na(r$fixed_slot)) {
+      val <- slot_value_vec(rep(r$fixed_slot, nrow(asset_new_draws)))
+      val[is.na(val)] <- 0
+      return(val)
+    }
+
+    og_slot <- asset_slot_new_draws[, aid]
+    val <- slot_value_vec(og_slot)
+    allocated <- asset_convey_new_draws[, aid] > 0
+    out <- ifelse(!is.na(og_slot) & allocated, val, 0)
+    out[is.na(out)] <- 0
+    out
+  }
+
+  sent_pick_ev_base <- function(display_id) {
+    ids <- display_member_ids(display_id)
+    if (length(ids) == 0) return(zero_trade_vec())
+    cols <- vapply(ids, underlying_pick_ev_base, numeric(nrow(asset_new_draws)))
+    if (is.null(dim(cols))) return(cols)
+    rowSums(cols)
+  }
+
+  underlying_pick_ev_with_attachment <- function(aid, side, receiver, display_id) {
+    r <- pick_assets %>% filter(asset_id == aid)
+    if (nrow(r) == 0) return(zero_trade_vec())
+    base <- underlying_pick_ev_base(aid)
+    if (!isTRUE(input$tm_obligations)) return(base)
+    if (r$year == 2026L && !is.na(r$fixed_slot)) return(base)
+
+    pid <- paste0("prot_", side, "_", safe_id(display_id))
+    sid <- paste0("swap_", side, "_", safe_id(display_id))
+    prot <- input[[pid]]
+    swap <- isTRUE(input[[sid]])
+    yc   <- as.character(r$year)
+
+    if (swap) {
+      og_slot <- asset_slot_new_draws[, aid]
+      rc_slot <- team_slot_new_draws[, receiver, yc]
+      best <- pmin(og_slot, rc_slot, na.rm = TRUE)
+      best[is.infinite(best)] <- NA_real_
+      val <- slot_value_vec(best)
+      val[is.na(best) | is.na(val)] <- 0
+      return(val)
+    }
+
+    if (!is.null(prot) && prot != "none") {
+      N <- protection_floor_app(prot)
+      og_slot <- asset_slot_new_draws[, aid]
+      raw_ev <- slot_value_vec(og_slot)
+      out <- ifelse(!is.na(og_slot) & og_slot > N, raw_ev, 0)
+      out[is.na(out)] <- 0
+      return(out)
+    }
+
+    base
+  }
+
+  # Expected-value version, with optional hypothetical attachments applied.
+  # Grouped RealGM entitlements are already conditional/ranked pools, so extra
+  # hypothetical add-ons are intentionally disabled for them in the UI and here.
+  sent_pick_ev_value <- function(display_id, side, receiver) {
+    r <- pick_display_assets %>% filter(display_asset_id == display_id)
+    if (nrow(r) == 0) return(zero_trade_vec())
+
+    base <- sent_pick_ev_base(display_id)
+    if (!isTRUE(input$tm_obligations)) return(base)
+    if (r$year == 2026L || r$member_n > 1 || r$group_type != "single_asset") return(base)
+
+    ids <- display_member_ids(display_id)
+    if (length(ids) != 1L) return(base)
+    underlying_pick_ev_with_attachment(ids[1], side, receiver, display_id)
+  }
+
+  underlying_pick_outcome_base <- function(aid) {
+    base <- asset_new_draws[, aid]
+    base[is.na(base)] <- 0
+    base
+  }
+
+  underlying_pick_outcome_with_attachment <- function(aid, side, receiver, display_id) {
+    r <- pick_assets %>% filter(asset_id == aid)
+    if (nrow(r) == 0) return(zero_trade_vec())
+
+    base <- underlying_pick_outcome_base(aid)
+    if (!isTRUE(input$tm_obligations)) return(base)
+    if (r$year == 2026L && !is.na(r$fixed_slot)) return(base)
+
+    pid <- paste0("prot_", side, "_", safe_id(display_id))
+    sid <- paste0("swap_", side, "_", safe_id(display_id))
+    prot <- input[[pid]]
+    swap <- isTRUE(input[[sid]])
+    yc   <- as.character(r$year)
+
+    if (swap) {
+      og_slot <- asset_slot_new_draws[, aid]
+      rc_slot <- team_slot_new_draws[, receiver, yc]
+      best <- pmin(og_slot, rc_slot, na.rm = TRUE)
+      best[is.infinite(best)] <- NA_real_
+
+      val <- slot_value_vec(best)
+      use_original_draw <- !is.na(best) & !is.na(og_slot) & best == og_slot
+      val[use_original_draw] <- asset_raw_new_draws[use_original_draw, aid]
+      val[is.na(best) | is.na(val)] <- 0
+      return(val)
+    }
+
+    if (!is.null(prot) && prot != "none") {
+      N <- protection_floor_app(prot)
+      og_slot <- asset_slot_new_draws[, aid]
+      raw_outcome <- asset_raw_new_draws[, aid]
+      out <- ifelse(!is.na(og_slot) & og_slot > N, raw_outcome, 0)
+      out[is.na(out)] <- 0
+      return(out)
+    }
+
+    base
+  }
+
+  sent_pick_outcome_value <- function(display_id, side, receiver) {
+    r <- pick_display_assets %>% filter(display_asset_id == display_id)
+    if (nrow(r) == 0) return(zero_trade_vec())
+
+    base <- display_asset_new_draws[, display_id]
+    base[is.na(base)] <- 0
+    if (!isTRUE(input$tm_obligations)) return(base)
+    if (r$year == 2026L || r$member_n > 1 || r$group_type != "single_asset") return(base)
+
+    ids <- display_member_ids(display_id)
+    if (length(ids) != 1L) return(base)
+    underlying_pick_outcome_with_attachment(ids[1], side, receiver, display_id)
+  }
+
+  # Sum sent-pick values for a side (vectors over sims).
+  side_out_ev_value <- function(ids, side, receiver) {
+    if (is.null(ids) || length(ids) == 0) return(zero_trade_vec())
+    cols <- vapply(ids, function(aid) sent_pick_ev_value(aid, side, receiver),
+                   numeric(nrow(asset_new_draws)))
+    if (is.null(dim(cols))) return(cols)
+    rowSums(cols)
+  }
+
+  side_outcome_value <- function(ids, side, receiver) {
+    if (is.null(ids) || length(ids) == 0) return(zero_trade_vec())
+    cols <- vapply(ids, function(aid) sent_pick_outcome_value(aid, side, receiver),
+                   numeric(nrow(asset_new_draws)))
+    if (is.null(dim(cols))) return(cols)
+    rowSums(cols)
+  }
+
+  # Joint per-sim net value transferred (A receives B's sent picks and vice versa).
+  trade_draws <- reactive({
+    idsA <- input$tm_picksA
+    idsB <- input$tm_picksB
+    if ((is.null(idsA) || length(idsA) == 0) &&
+        (is.null(idsB) || length(idsB) == 0)) return(NULL)
+
+    # A sends idsA (received by B); B sends idsB (received by A).
+    A_out_ev <- side_out_ev_value(idsA, "A", receiver = input$tm_teamB)
+    B_out_ev <- side_out_ev_value(idsB, "B", receiver = input$tm_teamA)
+
+    A_out_outcome <- side_outcome_value(idsA, "A", receiver = input$tm_teamB)
+    B_out_outcome <- side_outcome_value(idsB, "B", receiver = input$tm_teamA)
+
+    tibble(
+      net_to_A_ev      = B_out_ev - A_out_ev,
+      net_to_B_ev      = A_out_ev - B_out_ev,
+      net_to_A_outcome = B_out_outcome - A_out_outcome,
+      net_to_B_outcome = A_out_outcome - B_out_outcome
+    )
+  })
+
+  output$tm_verdict <- renderUI({
+    d <- trade_draws()
+    if (is.null(d)) return(tags$div(style = "color:#666;",
+      "Select picks from one or both teams to assess the trade."))
+
+    eA_ev  <- mean(d$net_to_A_ev)
+    q05_ev <- quantile(d$net_to_A_ev, 0.05)
+    q95_ev <- quantile(d$net_to_A_ev, 0.95)
+    pA_ev  <- mean(d$net_to_A_ev > 0)
+    pB_ev  <- mean(d$net_to_A_ev < 0)
+    pTie_ev <- mean(d$net_to_A_ev == 0)
+
+    eA_outcome  <- mean(d$net_to_A_outcome)
+    q05_outcome <- quantile(d$net_to_A_outcome, 0.05)
+    q95_outcome <- quantile(d$net_to_A_outcome, 0.95)
+    pA_outcome  <- mean(d$net_to_A_outcome > 0)
+    pB_outcome  <- mean(d$net_to_A_outcome < 0)
+    pTie_outcome <- mean(d$net_to_A_outcome == 0)
+
+    winner <- if (abs(eA_ev) < 1e-8) "Neither team" else if (eA_ev > 0) input$tm_teamA else input$tm_teamB
+    wcol   <- if (abs(eA_ev) < 1e-8) "#aaa" else if (eA_ev > 0) "#10b981" else "#ef4444"
+    edge_team <- if (abs(eA_ev) < 1e-8) "neither team" else if (eA_ev > 0) input$tm_teamA else input$tm_teamB
+    edge_val  <- abs(eA_ev)
+
+    ev_prob_text <- if (pTie_ev > 0.001) {
+      sprintf("P(%s higher EV) = %.0f%% | P(%s higher EV) = %.0f%% | tie = %.0f%%",
+              input$tm_teamA, 100 * pA_ev,
+              input$tm_teamB, 100 * pB_ev,
+              100 * pTie_ev)
+    } else {
+      sprintf("P(%s higher EV) = %.0f%% | P(%s higher EV) = %.0f%%",
+              input$tm_teamA, 100 * pA_ev,
+              input$tm_teamB, 100 * pB_ev)
+    }
+
+    outcome_prob_text <- if (pTie_outcome > 0.001) {
+      sprintf("P(%s's received pick(s) produce more realized 4-yr WS) = %.0f%% | P(%s) = %.0f%% | tie = %.0f%%",
+              input$tm_teamA, 100 * pA_outcome,
+              input$tm_teamB, 100 * pB_outcome,
+              100 * pTie_outcome)
+    } else {
+      sprintf("P(%s's received pick(s) produce more realized 4-yr WS) = %.0f%% | P(%s) = %.0f%%",
+              input$tm_teamA, 100 * pA_outcome,
+              input$tm_teamB, 100 * pB_outcome)
+    }
+
+    obl <- if (isTRUE(input$tm_obligations))
+      " Hypothetical protections / swaps are applied to the EV calculation; realized-outcome draws apply protections directly and use an EV proxy for hypothetical swap slots when needed." else ""
+
+    tags$div(style = "font-size:12px; color:#bbb; line-height:1.8;",
+      tags$div(style = "font-size:14px;",
+        tags$strong(style = sprintf("color:%s;", wcol),
+          sprintf("Expected asset edge to %s", winner)),
+        sprintf(" — %+.1f WS to %s", edge_val, edge_team)),
+      tags$div(sprintf("90%% posterior interval on expected asset edge to %s: [%+.1f, %+.1f] WS",
+                       input$tm_teamA, q05_ev, q95_ev)),
+      tags$div(ev_prob_text),
+      tags$hr(style = "border-color:#222; margin:8px 0;"),
+      tags$div(style = "color:#d0d0d0;", tags$strong("Realized player-outcome simulation")),
+      tags$div(sprintf("Mean realized-outcome net to %s: %+.1f WS | 90%% interval: [%+.1f, %+.1f] WS",
+                       input$tm_teamA, eA_outcome, q05_outcome, q95_outcome)),
+      tags$div(outcome_prob_text),
+      tags$div(style = "color:#888; margin-top:6px;",
+        sprintf("A sends %d pick(s); B sends %d pick(s). EV uses posterior mean slot curves; realized outcome uses sampled player-level 4-yr WS draws, so a later pick can still beat an earlier pick ex post.%s",
+                length(input$tm_picksA %||% character(0)),
+                length(input$tm_picksB %||% character(0)), obl)))
+  })
+
+  output$tm_dist <- renderPlotly({
+    d <- trade_draws()
+    if (is.null(d)) return(plotly_empty())
+    plot_ly() %>%
+      add_histogram(x = d$net_to_A_outcome, nbinsx = 55, opacity = 0.55,
+                    marker = list(color = "#6d28d9"),
+                    name = "Realized outcome") %>%
+      add_histogram(x = d$net_to_A_ev, nbinsx = 35, opacity = 0.70,
+                    marker = list(color = "#f59e0b"),
+                    name = "Expected asset value") %>%
+      layout(
+        barmode = "overlay",
+        paper_bgcolor = "rgba(0,0,0,0)", plot_bgcolor = "#0f0f1a",
+        font = list(family = "IBM Plex Mono", color = "#999"),
+        xaxis = list(title = sprintf("Net 4-yr WS transferred to %s (>0 favors %s)",
+                                     input$tm_teamA, input$tm_teamA),
+                     gridcolor = "#1a1a2a", zerolinecolor = "#f59e0b"),
+        yaxis = list(title = "Simulations", gridcolor = "#1a1a2a"),
+        legend = list(x = 0.68, y = 0.95, font = list(size = 10)),
+        shapes = list(list(type = "line", x0 = 0, x1 = 0, y0 = 0, y1 = 1,
+                           yref = "paper",
+                           line = list(color = "#f59e0b", dash = "dash"))))
+  })
+
 }
 
 shinyApp(ui = ui, server = server)
+
