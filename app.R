@@ -1,5 +1,6 @@
 ################################################################################
 # NBA 3-2-1 Lottery Reform — Shiny Dashboard (v5)
+# VERSION NOTE: adds explicit second-round draft-pick value curve display.
 #
 # Reads dashboard_data.rds produced by nba_lottery.R
 #
@@ -36,7 +37,87 @@ dd <- readRDS(dashboard_path)
 summary_outcome_df <- dd$summary
 summary_df         <- summary_outcome_df  # backward-compatible alias for outcome mode
 lottery_dist <- dd$lottery_dist
+lottery_tier_validation <- dd$lottery_tier_validation %||% tibble()
+official_321_tier_odds <- dd$official_321_tier_odds %||% tibble()
+for (nm in c("prob_top10", "expected_pick_se", "prob_no1_se", "prob_top3_se", "prob_top5_se", "prob_top10_se")) {
+  if (!nm %in% names(lottery_dist)) lottery_dist[[nm]] <- NA_real_
+}
 pick_curve   <- dd$pick_curve
+
+# Normalize the exported pick-value curve for display. New dashboard_data.rds
+# files produced by nba_lottery_second_round.R export picks 1:60 directly. For
+# older / intermediate RDS files, rebuild any missing 31:60 rows from the
+# per-simulation posterior mean curve columns when available so the app never
+# silently omits the second-round curve.
+if (is.null(pick_curve) || nrow(pick_curve) == 0) {
+  pick_curve <- tibble(pick = integer(0))
+}
+if (!"round" %in% names(pick_curve) && "pick" %in% names(pick_curve)) {
+  pick_curve <- pick_curve %>%
+    mutate(round = if_else(.data$pick >= 31L, 2L, 1L))
+}
+if ("pick" %in% names(pick_curve) && !all(31:60 %in% pick_curve$pick)) {
+  missing_r2 <- setdiff(31:60, pick_curve$pick)
+  mu2_cols <- paste0("mu_", missing_r2)
+  if (!is.null(dd$sim_curve_par_draws) && all(mu2_cols %in% colnames(dd$sim_curve_par_draws))) {
+    sigma2_cols <- paste0("sigma_", missing_r2)
+    pplay2_cols <- paste0("p_play_", missing_r2)
+    rebuilt_r2 <- tibble(
+      pick = missing_r2,
+      round = 2L,
+      expected_war = colMeans(as.matrix(dd$sim_curve_par_draws[, mu2_cols, drop = FALSE]), na.rm = TRUE),
+      ev_q05 = apply(as.matrix(dd$sim_curve_par_draws[, mu2_cols, drop = FALSE]), 2, quantile, 0.05, na.rm = TRUE),
+      ev_q50 = apply(as.matrix(dd$sim_curve_par_draws[, mu2_cols, drop = FALSE]), 2, quantile, 0.50, na.rm = TRUE),
+      ev_q95 = apply(as.matrix(dd$sim_curve_par_draws[, mu2_cols, drop = FALSE]), 2, quantile, 0.95, na.rm = TRUE),
+      outcome_q10 = NA_real_,
+      outcome_q90 = NA_real_,
+      war_sd = if (all(sigma2_cols %in% colnames(dd$sim_curve_par_draws))) {
+        colMeans(as.matrix(dd$sim_curve_par_draws[, sigma2_cols, drop = FALSE]), na.rm = TRUE)
+      } else {
+        NA_real_
+      },
+      p_play = if (all(pplay2_cols %in% colnames(dd$sim_curve_par_draws))) {
+        colMeans(as.matrix(dd$sim_curve_par_draws[, pplay2_cols, drop = FALSE]), na.rm = TRUE)
+      } else {
+        NA_real_
+      },
+      p_play_q05 = if (all(pplay2_cols %in% colnames(dd$sim_curve_par_draws))) {
+        apply(as.matrix(dd$sim_curve_par_draws[, pplay2_cols, drop = FALSE]), 2, quantile, 0.05, na.rm = TRUE)
+      } else {
+        NA_real_
+      },
+      p_play_q50 = if (all(pplay2_cols %in% colnames(dd$sim_curve_par_draws))) {
+        apply(as.matrix(dd$sim_curve_par_draws[, pplay2_cols, drop = FALSE]), 2, quantile, 0.50, na.rm = TRUE)
+      } else {
+        NA_real_
+      },
+      p_play_q95 = if (all(pplay2_cols %in% colnames(dd$sim_curve_par_draws))) {
+        apply(as.matrix(dd$sim_curve_par_draws[, pplay2_cols, drop = FALSE]), 2, quantile, 0.95, na.rm = TRUE)
+      } else {
+        NA_real_
+      }
+    )
+    pick_curve <- bind_rows(pick_curve, rebuilt_r2)
+  }
+}
+# Backfill fields used by the plotters for compatibility with old RDS files.
+if (!"p_play" %in% names(pick_curve)) {
+  pick_curve <- pick_curve %>% mutate(p_play = if_else(.data$pick <= 30L, 1, NA_real_))
+}
+if (!"emp_p_play" %in% names(pick_curve)) {
+  pick_curve <- pick_curve %>% mutate(emp_p_play = NA_real_)
+}
+for (nm in c("p_play_q05", "p_play_q50", "p_play_q95")) {
+  if (!nm %in% names(pick_curve)) pick_curve[[nm]] <- NA_real_
+}
+# Newer 04_lotterySims exports these directly. Keep backward compatibility so
+# older dashboard_data.rds files do not break, but do not use war_sd as the
+# curve ribbon anymore.
+for (nm in c("ev_q05", "ev_q50", "ev_q95", "outcome_q10", "outcome_q90")) {
+  if (!nm %in% names(pick_curve)) pick_curve[[nm]] <- NA_real_
+}
+pick_curve <- pick_curve %>% arrange(.data$pick)
+
 trans_mat    <- dd$transition_matrix
 trans_counts <- dd$transition_counts
 stationary   <- dd$stationary
@@ -46,6 +127,10 @@ stan_diag    <- dd$stan_diagnostics
 
 # Per-pick objects (Single Pick & Trade Machine tabs)
 pick_assets        <- dd$pick_assets
+if (!"round" %in% names(pick_assets)) {
+  pick_assets <- pick_assets %>%
+    mutate(round = if_else(!is.na(fixed_slot) & fixed_slot >= 31L, 2L, 1L))
+}
 pick_value_summary <- dd$pick_value_summary
 asset_cur_draws    <- dd$asset_cur_draws
 asset_new_draws    <- dd$asset_new_draws
@@ -70,6 +155,8 @@ if (!is.null(dd$asset_convey_new_draws) && length(dd$asset_convey_new_draws) > 0
 }
 team_slot_cur_draws     <- dd$team_slot_cur_draws
 team_slot_new_draws     <- dd$team_slot_new_draws
+team_slot2_cur_draws    <- dd$team_slot2_cur_draws %||% NULL
+team_slot2_new_draws    <- dd$team_slot2_new_draws %||% NULL
 sim_curve_par_draws     <- dd$sim_curve_par_draws
 proj_years              <- dd$proj_years
 
@@ -90,10 +177,10 @@ slot_value_vec <- function(slot_vec) {
     slot_vec <- rep(slot_vec, length.out = n_draws)
   }
 
-  slot_clamped <- pmin(pmax(slot_vec, 1L), 30L)
+  slot_clamped <- pmin(pmax(slot_vec, 1L), 60L)
   slot_index <- ifelse(is.na(slot_clamped), 1L, slot_clamped)
 
-  mu_cols <- paste0("mu_", 1:30)
+  mu_cols <- paste0("mu_", 1:60)
   if (all(mu_cols %in% colnames(sim_curve_par_draws))) {
     mu_mat <- as.matrix(sim_curve_par_draws[, mu_cols, drop = FALSE])
     out <- mu_mat[cbind(seq_len(n_draws), slot_index)]
@@ -105,7 +192,13 @@ slot_value_vec <- function(slot_vec) {
   a  <- sim_curve_par_draws[, "alpha"]
   b  <- sim_curve_par_draws[, "beta"]
   g  <- sim_curve_par_draws[, "gamma"]
-  out <- a / (slot_clamped ^ b) + g
+  out <- a / (pmin(slot_clamped, 30L) ^ b) + g
+  if (any(slot_clamped > 30, na.rm = TRUE)) {
+    # Old dashboard_data.rds files do not have a second-round curve. Use a
+    # conservative decaying tail instead of incorrectly valuing all seconds as
+    # pick 30.
+    out[slot_clamped > 30] <- pmax(0, out[slot_clamped > 30] * exp(-0.11 * (slot_clamped[slot_clamped > 30] - 30)))
+  }
   out[is.na(slot_clamped)] <- NA_real_
   out
 }
@@ -247,11 +340,76 @@ if (!is.null(dd$pick_display_assets) && nrow(dd$pick_display_assets) > 0) {
   pick_display_assets <- pick_assets %>%
     transmute(
       display_asset_id = paste0("display_", asset_id),
-      owner, year, label, obligation, notes,
+      owner, year, round, label, obligation, notes,
       group_type = "single_asset",
       display_group = asset_id,
       member_n = 1L,
       member_original_teams = original_team
+    )
+}
+
+if (!"round" %in% names(pick_display_assets)) {
+  pick_display_assets <- pick_display_assets %>%
+    left_join(pick_display_members %>% left_join(pick_assets %>% select(asset_id, round), by = "asset_id") %>%
+                group_by(display_asset_id) %>% summarise(round = min(round, na.rm = TRUE), .groups = "drop"),
+              by = "display_asset_id") %>%
+    mutate(round = if_else(is.infinite(round), 1L, as.integer(round)))
+}
+
+# Defensive team-name normalization for older dashboard_data.rds exports that
+# accidentally mixed full team names into owner/original-team fields. The app UI
+# should only expose NBA abbreviations in team dropdowns and pick labels.
+team_name_to_abbr_app <- c(
+  "Atlanta Hawks" = "ATL", "Boston Celtics" = "BOS", "Brooklyn Nets" = "BKN",
+  "New Jersey Nets" = "BKN", "Charlotte Hornets" = "CHA", "Charlotte Bobcats" = "CHA",
+  "Chicago Bulls" = "CHI", "Cleveland Cavaliers" = "CLE", "Dallas Mavericks" = "DAL",
+  "Denver Nuggets" = "DEN", "Detroit Pistons" = "DET", "Golden State Warriors" = "GSW",
+  "Houston Rockets" = "HOU", "Indiana Pacers" = "IND", "Los Angeles Clippers" = "LAC",
+  "Los Angeles Lakers" = "LAL", "Memphis Grizzlies" = "MEM", "Vancouver Grizzlies" = "MEM",
+  "Miami Heat" = "MIA", "Milwaukee Bucks" = "MIL", "Minnesota Timberwolves" = "MIN",
+  "New Orleans Pelicans" = "NOP", "New Orleans Hornets" = "NOP",
+  "New Orleans/Oklahoma City Hornets" = "NOP", "New York Knicks" = "NYK",
+  "Oklahoma City Thunder" = "OKC", "Seattle SuperSonics" = "OKC", "Orlando Magic" = "ORL",
+  "Philadelphia 76ers" = "PHI", "Phoenix Suns" = "PHX", "Portland Trail Blazers" = "POR",
+  "Sacramento Kings" = "SAC", "San Antonio Spurs" = "SAS", "Toronto Raptors" = "TOR",
+  "Utah Jazz" = "UTA", "Washington Wizards" = "WAS",
+  "BRK" = "BKN", "NJN" = "BKN", "CHO" = "CHA", "PHO" = "PHX", "NOH" = "NOP", "NOK" = "NOP", "PHL" = "PHI", "SAN" = "SAS", "SEA" = "OKC", "VAN" = "MEM"
+)
+
+canonical_team_abbr_app <- function(x) {
+  x <- as.character(x)
+  out <- stringr::str_squish(x)
+  idx <- !is.na(out) & out %in% names(team_name_to_abbr_app)
+  out[idx] <- unname(team_name_to_abbr_app[out[idx]])
+  out
+}
+
+canonical_team_list_app <- function(x) {
+  vapply(as.character(x), function(one) {
+    if (is.na(one) || !nzchar(one)) return(NA_character_)
+    vals <- unlist(stringr::str_split(one, "\\s*,\\s*"), use.names = FALSE)
+    vals <- canonical_team_abbr_app(vals)
+    paste(vals[!is.na(vals) & nzchar(vals)], collapse = ", ")
+  }, character(1))
+}
+
+if (all(c("owner", "original_team") %in% names(pick_assets))) {
+  pick_assets <- pick_assets %>%
+    mutate(
+      owner = canonical_team_abbr_app(.data$owner),
+      original_team = canonical_team_abbr_app(.data$original_team)
+    )
+}
+
+if ("owner" %in% names(pick_display_assets)) {
+  pick_display_assets <- pick_display_assets %>%
+    mutate(
+      owner = canonical_team_abbr_app(.data$owner),
+      member_original_teams = if ("member_original_teams" %in% names(.)) {
+        canonical_team_list_app(.data$member_original_teams)
+      } else {
+        .data$member_original_teams
+      }
     )
 }
 
@@ -314,6 +472,64 @@ pick_display_value_ev_summary <- if (!is.null(dd$pick_display_value_ev_summary) 
       new_expected_pick_count = colMeans(display_convey_new_draws)[display_asset_id]
     )
 }
+
+# Backward-compatible display cleanup: older dashboard_data.rds exports can
+# contain internal own/retained rows that never convey under either system.
+# Those rows are allocator artifacts, not real user-facing pick entitlements,
+# so remove them from Single Pick / Trade Machine selectors and summaries.
+expected_display_count_app <- function(mat, ids) {
+  vals <- setNames(rep(0, length(ids)), ids)
+  if (!is.null(mat) && length(mat) > 0 && ncol(mat) > 0) {
+    cm <- colMeans(mat, na.rm = TRUE)
+    hit <- intersect(names(cm), ids)
+    vals[hit] <- cm[hit]
+  }
+  vals
+}
+
+filter_display_matrix_app <- function(mat, ids) {
+  if (is.null(mat) || length(mat) == 0) return(mat)
+  ids <- ids[ids %in% colnames(mat)]
+  mat[, ids, drop = FALSE]
+}
+
+display_convey_audit_app <- tibble(
+  display_asset_id = pick_display_assets$display_asset_id,
+  cur_expected_pick_count = expected_display_count_app(display_convey_cur_draws, pick_display_assets$display_asset_id),
+  new_expected_pick_count = expected_display_count_app(display_convey_new_draws, pick_display_assets$display_asset_id)
+) %>%
+  mutate(active_display_asset = .data$cur_expected_pick_count > 0 | .data$new_expected_pick_count > 0)
+
+hidden_zero_convey_display_assets_app <- pick_display_assets %>%
+  left_join(display_convey_audit_app, by = "display_asset_id") %>%
+  filter(!.data$active_display_asset)
+
+active_display_ids_app <- display_convey_audit_app %>%
+  filter(.data$active_display_asset) %>%
+  pull(display_asset_id)
+
+if (nrow(hidden_zero_convey_display_assets_app) > 0) {
+  message(sprintf(
+    "Hiding %d zero-conveyance display-only pick rows from user-facing selectors",
+    nrow(hidden_zero_convey_display_assets_app)
+  ))
+}
+
+pick_display_assets <- pick_display_assets %>%
+  filter(.data$display_asset_id %in% active_display_ids_app)
+pick_display_members <- pick_display_members %>%
+  semi_join(pick_display_assets %>% select(display_asset_id), by = "display_asset_id")
+pick_display_value_summary <- pick_display_value_summary %>%
+  filter(.data$display_asset_id %in% active_display_ids_app)
+pick_display_value_ev_summary <- pick_display_value_ev_summary %>%
+  filter(.data$display_asset_id %in% active_display_ids_app)
+
+display_asset_cur_draws <- filter_display_matrix_app(display_asset_cur_draws, active_display_ids_app)
+display_asset_new_draws <- filter_display_matrix_app(display_asset_new_draws, active_display_ids_app)
+display_asset_cur_ev_draws <- filter_display_matrix_app(display_asset_cur_ev_draws, active_display_ids_app)
+display_asset_new_ev_draws <- filter_display_matrix_app(display_asset_new_ev_draws, active_display_ids_app)
+display_convey_cur_draws <- filter_display_matrix_app(display_convey_cur_draws, active_display_ids_app)
+display_convey_new_draws <- filter_display_matrix_app(display_convey_new_draws, active_display_ids_app)
 
 build_team_summary_from_asset_draws_app <- function(cur_mat, new_mat, base_summary) {
   teams <- base_summary$team
@@ -394,6 +610,205 @@ summary_for_value_mode <- function(mode) {
   if (identical(mode, "ev")) summary_ev_df else summary_outcome_df
 }
 
+
+# User-facing short pick labels and actual-slot tags used by Single Pick and Trade Machine.
+# The display registry can group multiple internal conditional legs; these helpers keep
+# dropdown labels concise while preserving the underlying RealGM-style entitlement.
+display_fixed_slot_tbl <- pick_display_members %>%
+  left_join(pick_assets %>% select(asset_id, fixed_slot), by = "asset_id") %>%
+  group_by(display_asset_id) %>%
+  summarise(
+    fixed_slot_display = {
+      slots <- sort(unique(fixed_slot[is.finite(fixed_slot)]))
+      if (length(slots) == 0L) NA_character_ else paste0("#", paste(slots, collapse = "/#"))
+    },
+    .groups = "drop"
+  )
+
+pick_display_assets <- pick_display_assets %>%
+  select(-any_of("fixed_slot_display")) %>%
+  left_join(display_fixed_slot_tbl, by = "display_asset_id") %>%
+  mutate(fixed_slot_display = coalesce(.data$fixed_slot_display, NA_character_))
+
+split_abbrs <- function(x) {
+  x <- as.character(x %||% "")
+  x[is.na(x)] <- ""
+  out <- unlist(str_split(x, "\\s*,\\s*"), use.names = FALSE)
+  out[!is.na(out) & nzchar(out)]
+}
+
+extract_swap_terms_from_text <- function(text, original_teams = character(0), owner = NA_character_) {
+  text <- as.character(text %||% "")
+  text[is.na(text)] <- ""
+  holder <- str_match(text, "via\\s+([A-Z]{2,3})\\s+swap")[, 2]
+  if (is.na(holder)) holder <- str_match(text, "([A-Z]{2,3})\\s+may\\s+swap")[, 2]
+  if (is.na(holder)) holder <- str_match(text, "after\\s+([A-Z]{2,3})['’]?s\\s+swap")[, 2]
+
+  target <- str_match(text, "swap\\s+for\\s+([A-Z]{2,3})")[, 2]
+  if (is.na(target)) target <- str_match(text, "swap\\s+with\\s+([A-Z]{2,3})")[, 2]
+  if (is.na(target) && !is.na(holder)) {
+    other <- setdiff(original_teams, holder)
+    if (length(other) > 0) target <- other[1]
+  }
+  if (is.na(target) && length(original_teams) > 0 && !is.na(owner)) {
+    other <- setdiff(original_teams, owner)
+    if (length(other) > 0) target <- other[1]
+  }
+
+  min_pick <- 1L
+  max_pick <- 30L
+  if (!is.na(target)) {
+    rg <- str_match(text, paste0(target, "\\s+(\\d+)-(\\d+)"))
+    if (!is.na(rg[1, 1])) {
+      min_pick <- as.integer(rg[1, 2])
+      max_pick <- as.integer(rg[1, 3])
+    }
+  }
+  if (str_detect(text, regex("keeps #1|protected #1", ignore_case = TRUE)) && min_pick == 1L) {
+    min_pick <- 2L
+  }
+  if (str_detect(text, regex("keeps 1-2|protected 1-2", ignore_case = TRUE)) && min_pick == 1L) {
+    min_pick <- 3L
+  }
+  if (str_detect(text, regex("keeps 1-3|protected 1-3", ignore_case = TRUE)) && min_pick == 1L) {
+    min_pick <- 4L
+  }
+
+  list(holder = holder, target = target, min_pick = min_pick, max_pick = max_pick)
+}
+
+display_pick_short_label <- function(year, round, owner, member_original_teams,
+                                     group_type, label, obligation, notes,
+                                     fixed_slot_display = NA_character_) {
+  rnd <- paste0("R", as.integer(round))
+  slot_txt <- if (!is.na(fixed_slot_display) && nzchar(fixed_slot_display)) {
+    paste0(" ", fixed_slot_display)
+  } else {
+    ""
+  }
+  origs <- split_abbrs(member_original_teams)
+  if (length(origs) == 0L) origs <- owner
+
+  text <- paste(label %||% "", obligation %||% "", notes %||% "")
+  terms <- extract_swap_terms_from_text(text, origs, owner)
+  if (!is.na(terms$holder) && !is.na(terms$target)) {
+    other <- setdiff(origs, owner)
+    if (length(other) == 0L) other <- terms$target
+    return(str_squish(sprintf("%s%s own or %s via %s swap", rnd, slot_txt, other[1], terms$holder)))
+  }
+
+  simple_group <- is.na(group_type) || group_type %in% c("single_asset", "own", "outright")
+  if (length(origs) == 1L && simple_group) {
+    via <- if (identical(origs[1], owner)) "own" else paste("via", origs[1])
+    return(str_squish(sprintf("%s%s %s", rnd, slot_txt, via)))
+  }
+
+  if (length(origs) == 1L) {
+    via <- if (identical(origs[1], owner)) "own" else paste("via", origs[1])
+    return(str_squish(sprintf("%s%s %s", rnd, slot_txt, via)))
+  }
+
+  label_clean <- str_remove(as.character(label %||% ""), paste0("^", year, "\\s+"))
+  str_squish(sprintf("%s%s %s", rnd, slot_txt, label_clean))
+}
+
+pick_display_assets <- pick_display_assets %>%
+  rowwise() %>%
+  mutate(
+    short_label = display_pick_short_label(
+      year, round, owner, member_original_teams,
+      group_type, label, obligation, notes, fixed_slot_display
+    ),
+    trade_label = str_squish(sprintf("%d %s", year, short_label))
+  ) %>%
+  ungroup()
+
+team_delta_draw_summary_app <- function(cur_mat, new_mat, asset_owner_tbl, teams, mode = c("total", "quality")) {
+  mode <- match.arg(mode)
+  purrr::map_dfr(teams, function(tm) {
+    ids <- asset_owner_tbl %>% filter(.data$owner == .env$tm) %>% pull(asset_id)
+    ids <- ids[ids %in% colnames(cur_mat) & ids %in% colnames(new_mat)]
+    if (length(ids) == 0L) {
+      delta <- rep(0, nrow(new_mat))
+    } else if (mode == "quality") {
+      cur_sub <- cur_mat[, ids, drop = FALSE]
+      new_sub <- new_mat[, ids, drop = FALSE]
+      cur_val <- if (ncol(cur_sub) == 1L) as.numeric(cur_sub[, 1]) else apply(cur_sub, 1, max, na.rm = TRUE)
+      new_val <- if (ncol(new_sub) == 1L) as.numeric(new_sub[, 1]) else apply(new_sub, 1, max, na.rm = TRUE)
+      cur_val[!is.finite(cur_val)] <- 0
+      new_val[!is.finite(new_val)] <- 0
+      delta <- new_val - cur_val
+    } else {
+      delta <- rowSums(new_mat[, ids, drop = FALSE], na.rm = TRUE) -
+        rowSums(cur_mat[, ids, drop = FALSE], na.rm = TRUE)
+    }
+    tibble(
+      team = tm,
+      delta_mean = mean(delta, na.rm = TRUE),
+      delta_q05  = as.numeric(quantile(delta, 0.05, na.rm = TRUE)),
+      delta_q95  = as.numeric(quantile(delta, 0.95, na.rm = TRUE))
+    )
+  })
+}
+
+team_quantity_delta_summary_app <- function(cur_convey_mat, new_convey_mat, display_assets, teams) {
+  purrr::map_dfr(teams, function(tm) {
+    ids <- display_assets %>% filter(.data$owner == .env$tm) %>% pull(display_asset_id)
+    ids <- ids[ids %in% colnames(cur_convey_mat) & ids %in% colnames(new_convey_mat)]
+    if (length(ids) == 0L) {
+      delta <- rep(0, nrow(new_convey_mat))
+    } else {
+      delta <- rowSums(new_convey_mat[, ids, drop = FALSE], na.rm = TRUE) -
+        rowSums(cur_convey_mat[, ids, drop = FALSE], na.rm = TRUE)
+    }
+    tibble(
+      team = tm,
+      delta_mean = mean(delta, na.rm = TRUE),
+      delta_q05  = as.numeric(quantile(delta, 0.05, na.rm = TRUE)),
+      delta_q95  = as.numeric(quantile(delta, 0.95, na.rm = TRUE))
+    )
+  })
+}
+
+all_summary_teams <- sort(unique(summary_outcome_df$team))
+team_delta_outcome_total <- team_delta_draw_summary_app(asset_cur_draws, asset_new_draws, pick_assets, all_summary_teams, "total")
+team_delta_ev_total <- team_delta_draw_summary_app(asset_cur_ev_draws, asset_new_ev_draws, pick_assets, all_summary_teams, "total")
+team_delta_outcome_quality <- team_delta_draw_summary_app(asset_cur_draws, asset_new_draws, pick_assets, all_summary_teams, "quality")
+team_delta_ev_quality <- team_delta_draw_summary_app(asset_cur_ev_draws, asset_new_ev_draws, pick_assets, all_summary_teams, "quality")
+team_delta_quantity <- team_quantity_delta_summary_app(display_convey_cur_draws, display_convey_new_draws, pick_display_assets, all_summary_teams)
+
+team_delta_for_mode <- function(value_mode, metric = "total") {
+  if (identical(metric, "quantity")) return(team_delta_quantity)
+  if (identical(value_mode, "ev") && identical(metric, "quality")) return(team_delta_ev_quality)
+  if (identical(value_mode, "ev")) return(team_delta_ev_total)
+  if (identical(metric, "quality")) return(team_delta_outcome_quality)
+  team_delta_outcome_total
+}
+
+team_slot_array_for_round_app <- function(round, system = c("new", "cur")) {
+  system <- match.arg(system)
+  if (as.integer(round) == 2L) {
+    arr <- if (system == "new") team_slot2_new_draws else team_slot2_cur_draws
+    if (!is.null(arr)) return(arr)
+  }
+  if (system == "new") team_slot_new_draws else team_slot_cur_draws
+}
+
+probability_summary_from_indicator <- function(x) {
+  x <- as.numeric(x)
+  x <- x[is.finite(x)]
+  if (length(x) == 0L) {
+    return(tibble(prob = NA_real_, q05 = NA_real_, q95 = NA_real_))
+  }
+  p <- mean(x > 0, na.rm = TRUE)
+  se <- sqrt(pmax(p * (1 - p) / length(x), 0))
+  tibble(
+    prob = p,
+    q05 = pmax(0, p - 1.645 * se),
+    q95 = pmin(1, p + 1.645 * se)
+  )
+}
+
 # Team abbreviations present in the asset registry, sorted
 all_team_abbr <- sort(unique(c(pick_display_assets$owner, pick_assets$owner, pick_assets$original_team)))
 
@@ -403,11 +818,15 @@ protection_choices <- c(
   "Top-1"  = "top1",  "Top-2"  = "top2",  "Top-3"  = "top3",  "Top-4"  = "top4",
   "Top-5"  = "top5",  "Top-6"  = "top6",  "Top-8"  = "top8",
   "Top-10" = "top10", "Lottery (top-14)" = "lottery",
-  "Top-16" = "top16", "Top-20" = "top20"
+  "Top-16" = "top16", "Top-20" = "top20",
+  "2nd protected 31-45" = "protected31_45",
+  "2nd protected 31-50" = "protected31_50",
+  "2nd protected 31-55" = "protected31_55"
 )
 protection_floor_app <- function(p) {
   switch(p, top1 = 1, top2 = 2, top3 = 3, top4 = 4, top5 = 5, top6 = 6,
-         top8 = 8, top10 = 10, lottery = 14, top16 = 16, top20 = 20, 0)
+         top8 = 8, top10 = 10, lottery = 14, top16 = 16, top20 = 20,
+         protected31_45 = 45, protected31_50 = 50, protected31_55 = 55, 0)
 }
 
 # Five 3-2-1 tiers, worst -> best
@@ -444,15 +863,33 @@ app_theme <- bs_theme(
 )
 
 plotly_dark <- function(p, ...) {
-  p %>%
-    layout(
-      paper_bgcolor = "rgba(0,0,0,0)",
-      plot_bgcolor  = "#0f0f1a",
-      font          = list(family = "IBM Plex Mono", color = "#999"),
-      xaxis = list(gridcolor = "#1a1a2a", zerolinecolor = "#333"),
-      yaxis = list(gridcolor = "#1a1a2a", zerolinecolor = "#333"),
-      ...
+  dots <- list(...)
+
+  xaxis <- modifyList(
+    list(gridcolor = "#1a1a2a", zerolinecolor = "#333"),
+    dots$xaxis %||% list()
+  )
+  yaxis <- modifyList(
+    list(gridcolor = "#1a1a2a", zerolinecolor = "#333"),
+    dots$yaxis %||% list()
+  )
+  dots$xaxis <- NULL
+  dots$yaxis <- NULL
+
+  do.call(
+    layout,
+    c(
+      list(
+        p,
+        paper_bgcolor = "rgba(0,0,0,0)",
+        plot_bgcolor  = "#0f0f1a",
+        font          = list(family = "IBM Plex Mono", color = "#999"),
+        xaxis = xaxis,
+        yaxis = yaxis
+      ),
+      dots
     )
+  )
 }
 
 
@@ -472,15 +909,27 @@ ui <- page_navbar(
     )
   ),
 
+  tags$head(tags$style(HTML("
+    .navbar, .bslib-page-navbar > .navbar {
+      position: sticky;
+      top: 0;
+      z-index: 1050;
+      box-shadow: 0 1px 0 #1a1a2a;
+    }
+    .sidebar .shiny-options-group label {
+      white-space: nowrap;
+    }
+  "))),
+
   # ---- Tab 1 ----
   nav_panel(
     title = "Impact",
     icon  = icon("chart-bar"),
     layout_sidebar(
       sidebar = sidebar(
-        width = 230,
+        width = 360,
         radioButtons("impact_value_mode", "Value basis",
-          choices = value_mode_choices, selected = "outcome"),
+          choices = value_mode_choices, selected = "outcome", inline = TRUE),
         selectInput("impact_sort", "Sort by",
           choices = c("Rule change impact" = "delta_value",
                       "Current value"       = "current_mean",
@@ -490,7 +939,7 @@ ui <- page_navbar(
         hr(),
         h6("How to read this"),
         p(style = "font-size:11px; color:#888; line-height:1.6;",
-          "Each bar is a team's change in expected draft-asset value ",
+          "Each point is a team's change in expected draft-asset value; the line shows the 90% interval. ",
           "(4-year Win Shares) summed over 2026-2032, moving from the old ",
           "lottery to the approved 3-2-1 system.",
           br(), br(),
@@ -510,9 +959,9 @@ ui <- page_navbar(
     icon  = icon("columns"),
     layout_sidebar(
       sidebar = sidebar(
-        width = 230,
+        width = 360,
         radioButtons("compare_value_mode", "Value basis",
-          choices = value_mode_choices, selected = "outcome"),
+          choices = value_mode_choices, selected = "outcome", inline = TRUE),
         radioButtons("compare_metric", "Metric",
           choices = c("Total portfolio value" = "total",
                       "Best single pick"       = "quality",
@@ -531,23 +980,16 @@ ui <- page_navbar(
     title = "Lottery Odds",
     icon  = icon("dice"),
     layout_columns(
-      col_widths = c(12, 12),
+      col_widths = c(6, 6),
       card(
         card_header("Expected Pick Position by Lottery Seed"),
-        plotlyOutput("lottery_line", height = "280px")
+        plotlyOutput("lottery_line", height = "640px")
       ),
       card(
         card_header("Probability of #1 Pick by Seed (%)"),
-        plotlyOutput("lottery_bar", height = "280px")
+        plotlyOutput("lottery_bar", height = "640px")
       )
-    ),
-    card(class = "mt-2", card_body(
-      style = "font-size:11px; color:#888; line-height:1.6;",
-      tags$strong(style = "color:#f59e0b;", "The relegation effect: "),
-      "Under 3-2-1 the three worst teams get only 2 balls each (~5.4% at #1), ",
-      "while the seven non-play-in teams above them get 3 balls each ",
-      "(~8.1% at #1). The worst record can pick no lower than 12th. ",
-      "All 16 lottery slots are drawn."))
+    )
   ),
 
   # ---- Tab 4 ----
@@ -556,9 +998,9 @@ ui <- page_navbar(
     icon  = icon("table"),
     layout_sidebar(
       sidebar = sidebar(
-        width = 230,
+        width = 360,
         radioButtons("table_value_mode", "Value basis",
-          choices = value_mode_choices, selected = "outcome"),
+          choices = value_mode_choices, selected = "outcome", inline = TRUE),
         tags$p(style = "font-size:11px; color:#888; line-height:1.6;",
           "Toggle whether team portfolio columns reflect sampled player outcomes or posterior expected asset values.")
       ),
@@ -574,26 +1016,57 @@ ui <- page_navbar(
   nav_panel(
     title = "Markov + Curve",
     icon  = icon("project-diagram"),
-    layout_columns(
-      col_widths = c(6, 6),
-      card(
-        card_header("Tier Transition Probabilities (row = from, col = to)"),
-        plotlyOutput("trans_heatmap", height = "360px")
+    div(class = "markov-curve-page",
+      tags$style(HTML("
+        .markov-curve-page {
+          padding: 6px 4px 12px;
+          height: auto !important;
+          max-height: none !important;
+          overflow: visible !important;
+        }
+        .markov-curve-page .card,
+        .markov-curve-page .bslib-card,
+        .markov-curve-page .card-body,
+        .markov-curve-page .bslib-card .card-body,
+        .markov-curve-page .bslib-card-body,
+        .markov-curve-page [data-card-body] {
+          height: auto !important;
+          max-height: none !important;
+          overflow: visible !important;
+        }
+        .markov-curve-page .curve-stack {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+      ")),
+      layout_columns(
+        col_widths = c(6, 6),
+        card(
+          card_header("Tier Transition Probabilities"),
+          plotlyOutput("trans_heatmap", height = "360px")
+        ),
+        card(
+          card_header("Tier Transition State Diagram"),
+          plotOutput("trans_diagram", height = "360px")
+        )
       ),
-      card(
-        card_header("Tier Transition State Diagram"),
-        plotOutput("trans_diagram", height = "360px")
-      )
-    ),
-    layout_columns(
-      col_widths = c(7, 5),
-      card(
-        card_header("Draft Pick Value Curve (4-yr Win Shares)"),
-        plotlyOutput("pick_curve_plot", height = "320px")
-      ),
-      card(
-        card_header("Model Validation"),
-        uiOutput("validation_panel")
+      layout_columns(
+        col_widths = c(7, 5),
+        div(class = "curve-stack",
+          card(
+            card_header("Round 1 Draft Pick Value Curve"),
+            plotlyOutput("pick_curve_plot_r1", height = "320px")
+          ),
+          card(
+            card_header("Round 2 Draft Pick Value Curve"),
+            plotlyOutput("pick_curve_plot_r2", height = "390px")
+          )
+        ),
+        card(
+          card_header("Model Validation"),
+          uiOutput("validation_panel")
+        )
       )
     )
   ),
@@ -604,10 +1077,11 @@ ui <- page_navbar(
     icon  = icon("basketball"),
     layout_sidebar(
       sidebar = sidebar(
-        width = 270,
+        width = 360,
         selectInput("sp_year", "Draft year",
-          choices  = sort(unique(pick_assets$year)),
+          choices  = sort(unique(pick_display_assets$year)),
           selected = 2026),
+        selectInput("sp_team", "Team", choices = NULL),
         selectInput("sp_asset", "Pick", choices = NULL),
         hr(),
         uiOutput("sp_obligation")
@@ -705,16 +1179,16 @@ ui <- page_navbar(
         )
       )
     )
-  ),
+  )#,
 
-  nav_spacer(),
-  nav_item(tags$small(
-    style = "color:#444; font-size:9px;",
-    sprintf("Pick curve %s | Markov: %d transitions / %d seasons | mixing %.1f yr",
-            stan_diag$pick_model$curve_type,
-            stan_diag$markov_model$n_transitions,
-            stan_diag$markov_model$n_seasons,
-            stan_diag$markov_model$mixing_time)))
+  # nav_spacer(),
+  # nav_item(tags$small(
+  #   style = "color:#444; font-size:9px;",
+  #   sprintf("Pick curve %s | Markov: %d transitions / %d seasons | mixing %.1f yr",
+  #           stan_diag$pick_model$curve_type,
+  #           stan_diag$markov_model$n_transitions,
+  #           stan_diag$markov_model$n_seasons,
+  #           stan_diag$markov_model$mixing_time)))
 )
 
 
@@ -723,6 +1197,50 @@ ui <- page_navbar(
 # ============================================================================
 
 server <- function(input, output, session) {
+
+  caterpillar_delta_plot <- function(df, x_title, hover_suffix = "WS") {
+    df <- df %>%
+      mutate(
+        sign_group = if_else(.data$delta_mean >= 0, "Positive", "Negative"),
+        team_fct = factor(.data$team, levels = rev(.data$team)),
+        hover_text = sprintf(
+          "<b>%s</b><br>Impact: %+.1f %s<br>90%% CI: [%+.1f, %+.1f] %s",
+          .data$team, .data$delta_mean, hover_suffix, .data$delta_q05, .data$delta_q95, hover_suffix
+        )
+      )
+
+    p <- plot_ly()
+    for (sg in c("Positive", "Negative")) {
+      sub <- df %>% filter(.data$sign_group == .env$sg)
+      if (nrow(sub) == 0) next
+      col <- if (sg == "Positive") "#10b981" else "#ef4444"
+      p <- p %>%
+        add_segments(
+          data = sub,
+          x = ~delta_q05, xend = ~delta_q95,
+          y = ~team_fct, yend = ~team_fct,
+          line = list(color = col, width = 3),
+          hoverinfo = "skip",
+          showlegend = FALSE
+        ) %>%
+        add_markers(
+          data = sub,
+          x = ~delta_mean, y = ~team_fct,
+          marker = list(color = col, size = 8, line = list(color = "#0f0f1a", width = 1)),
+          text = ~hover_text,
+          hovertemplate = "%{text}<extra></extra>",
+          name = sg,
+          showlegend = FALSE
+        )
+    }
+
+    p %>%
+      plotly_dark(
+        xaxis = list(title = list(text = x_title), zerolinecolor = "#444", tickformat = ".1f"),
+        yaxis = list(title = list(text = "Team"), tickfont = list(size = 10)),
+        margin = list(l = 62, r = 24, t = 20, b = 56)
+      )
+  }
 
   # ---- Impact ----
   output$impact_title <- renderText({
@@ -733,76 +1251,92 @@ server <- function(input, output, session) {
     sc <- input$impact_sort
     asc <- sc == "wins"
     df <- summary_for_value_mode(input$impact_value_mode) %>%
-      arrange(if (asc) !!sym(sc) else desc(!!sym(sc))) %>%
-      mutate(team_fct = factor(team, levels = rev(team)))
-    plot_ly(
-      data = df, y = ~team_fct, x = ~delta_value,
-      type = "bar", orientation = "h",
-      marker = list(color = ~ifelse(delta_value >= 0, "#059669", "#dc2626")),
-      hovertemplate = "<b>%{y}</b><br>Delta: %{x:.1f} WS<extra></extra>"
-    ) %>%
-      plotly_dark(
-        xaxis = list(title = sprintf("Delta %s (4-yr WS scale)", value_mode_label(input$impact_value_mode)),
-                     zerolinecolor = "#444"),
-        yaxis = list(title = "", tickfont = list(size = 10)),
-        margin = list(l = 52)
-      )
+      left_join(team_delta_for_mode(input$impact_value_mode, "total"), by = "team") %>%
+      mutate(
+        delta_mean = coalesce(.data$delta_mean, .data$delta_value),
+        delta_q05 = coalesce(.data$delta_q05, .data$delta_value),
+        delta_q95 = coalesce(.data$delta_q95, .data$delta_value)
+      ) %>%
+      arrange(if (asc) !!sym(sc) else desc(!!sym(sc)))
+
+    caterpillar_delta_plot(
+      df,
+      x_title = "Impact",
+      hover_suffix = "WS"
+    )
   })
 
   # ---- Compare ----
   output$compare_title <- renderText({
     basis <- value_mode_label(input$compare_value_mode)
     switch(input$compare_metric,
-      total    = sprintf("Total Portfolio Value — %s (4-yr WS scale, 2026-2032)", basis),
-      quality  = sprintf("Best Single Pick — %s (4-yr WS scale)", basis),
-      quantity = "Average Number of Picks Owned")
+      total    = sprintf("Total Portfolio Value Impact — %s (4-yr WS scale, 2026-2032)", basis),
+      quality  = sprintf("Best Single Pick Impact — %s (4-yr WS scale)", basis),
+      quantity = "Pick-Count Impact")
   })
 
   output$compare_chart <- renderPlotly({
+    metric <- input$compare_metric
+    deltas <- team_delta_for_mode(input$compare_value_mode, metric)
+
     df <- summary_for_value_mode(input$compare_value_mode) %>%
-      arrange(desc(current_mean)) %>%
-      mutate(team_fct = factor(team, levels = rev(team)))
-    if (input$compare_metric == "total") {
-      cur <- df$current_mean; new <- df$new_mean
-      x_title <- value_mode_label(input$compare_value_mode)
-    } else if (input$compare_metric == "quality") {
-      cur <- df$best_current; new <- df$best_new
-      x_title <- value_mode_label(input$compare_value_mode)
-    } else {
-      cur <- df$n_picks_mean; new <- df$n_picks_mean
-      x_title <- "Average number of picks owned"
-    }
-    plot_ly(data = df, y = ~team_fct) %>%
-      add_bars(x = cur, name = "Current",
-               marker = list(color = "#3b82f6"), orientation = "h") %>%
-      add_bars(x = new, name = "3-2-1",
-               marker = list(color = "#f59e0b"), orientation = "h") %>%
-      plotly_dark(
-        barmode = "group",
-        xaxis = list(title = x_title),
-        yaxis = list(title = "", tickfont = list(size = 10)),
-        margin = list(l = 52),
-        legend = list(x = 0.68, y = 0.04, font = list(size = 10))
-      )
+      left_join(deltas, by = "team") %>%
+      mutate(
+        delta_mean = case_when(
+          metric == "total" ~ coalesce(.data$delta_mean, .data$delta_value),
+          metric == "quality" ~ coalesce(.data$delta_mean, .data$delta_quality),
+          TRUE ~ coalesce(.data$delta_mean, 0)
+        ),
+        delta_q05 = coalesce(.data$delta_q05, .data$delta_mean),
+        delta_q95 = coalesce(.data$delta_q95, .data$delta_mean)
+      ) %>%
+      arrange(desc(.data$delta_mean))
+
+    x_title <- switch(metric,
+      total = "Impact",
+      quality = "Best-pick impact",
+      quantity = "Pick-count impact"
+    )
+    suffix <- if (metric == "quantity") "picks" else "WS"
+
+    caterpillar_delta_plot(df, x_title = x_title, hover_suffix = suffix)
   })
 
   # ---- Lottery line ----
   output$lottery_line <- renderPlotly({
     cur <- lottery_dist %>% filter(system == "Current", seed <= 16)
     new <- lottery_dist %>% filter(system == "Proposed 3-2-1", seed <= 16)
+
     plot_ly() %>%
       add_trace(data = cur, x = ~seed, y = ~expected_pick, type = "scatter",
                 mode = "lines+markers", name = "Current",
                 line = list(color = "#3b82f6", width = 3),
-                marker = list(color = "#3b82f6", size = 7)) %>%
+                marker = list(color = "#3b82f6", size = 7),
+                error_y = list(type = "data", array = ~(1.96 * expected_pick_se),
+                               visible = TRUE, color = "#3b82f6", thickness = 0.7),
+                hovertemplate = "Seed %{x}<br>Expected Pick: %{y:.1f}<extra></extra>") %>%
       add_trace(data = new, x = ~seed, y = ~expected_pick, type = "scatter",
-                mode = "lines+markers", name = "3-2-1",
+                mode = "lines+markers", name = "3-2-1 sim",
                 line = list(color = "#f59e0b", width = 3),
-                marker = list(color = "#f59e0b", size = 7)) %>%
+                marker = list(color = "#f59e0b", size = 7),
+                error_y = list(type = "data", array = ~(1.96 * expected_pick_se),
+                               visible = TRUE, color = "#f59e0b", thickness = 0.7),
+                hovertemplate = "Seed %{x}<br>Expected Pick: %{y:.1f}<extra></extra>") %>%
       plotly_dark(
-        xaxis = list(title = "Lottery Seed (1 = worst record)", dtick = 2),
-        yaxis = list(title = "Expected Pick", autorange = "reversed"),
-        legend = list(x = 0.05, y = 0.05, font = list(size = 10))
+        xaxis = list(title = list(text = "Lottery Seed (1 = worst record)"), dtick = 1),
+        yaxis = list(title = list(text = "Expected Pick"), range = c(16.5, 0.5), tickmode = "array", tickvals = 1:16),
+        margin = list(l = 64, r = 24, t = 78, b = 56),
+        legend = list(
+          orientation = "h",
+          x = 0.02,
+          y = 1.16,
+          xanchor = "left",
+          yanchor = "bottom",
+          font = list(size = 10),
+          bgcolor = "rgba(15,15,26,0.86)",
+          bordercolor = "rgba(255,255,255,0.08)",
+          borderwidth = 1
+        )
       )
   })
 
@@ -810,17 +1344,64 @@ server <- function(input, output, session) {
   output$lottery_bar <- renderPlotly({
     cur <- lottery_dist %>% filter(system == "Current", seed <= 16)
     new <- lottery_dist %>% filter(system == "Proposed 3-2-1", seed <= 16)
+
     plot_ly() %>%
       add_bars(data = cur, x = ~seed, y = ~(prob_no1 * 100),
-               name = "Current", marker = list(color = "#3b82f6")) %>%
+               name = "Current", marker = list(color = "#3b82f6"),
+               error_y = list(type = "data", array = ~(1.96 * prob_no1_se * 100),
+                              visible = TRUE, color = "#3b82f6", thickness = 0.7),
+               hovertemplate = "Seed %{x}<br>#1 Pick Odds: %{y:.1f}%<extra></extra>") %>%
       add_bars(data = new, x = ~seed, y = ~(prob_no1 * 100),
-               name = "3-2-1", marker = list(color = "#f59e0b")) %>%
+               name = "3-2-1 sim", marker = list(color = "#f59e0b"),
+               error_y = list(type = "data", array = ~(1.96 * prob_no1_se * 100),
+                              visible = TRUE, color = "#f59e0b", thickness = 0.7),
+               hovertemplate = "Seed %{x}<br>#1 Pick Odds: %{y:.1f}%<extra></extra>") %>%
       plotly_dark(
         barmode = "group",
-        xaxis = list(title = "Lottery Seed", dtick = 2),
-        yaxis = list(title = "P(#1) %"),
-        legend = list(x = 0.68, y = 0.95, font = list(size = 10))
+        xaxis = list(title = list(text = "Lottery Seed"), dtick = 1),
+        yaxis = list(title = list(text = "#1 Pick Odds")),
+        margin = list(l = 64, r = 24, t = 78, b = 56),
+        legend = list(
+          orientation = "h",
+          x = 0.02,
+          y = 1.16,
+          xanchor = "left",
+          yanchor = "bottom",
+          font = list(size = 10),
+          bgcolor = "rgba(15,15,26,0.86)",
+          bordercolor = "rgba(255,255,255,0.08)",
+          borderwidth = 1
+        )
       )
+  })
+
+  output$lottery_validation_table <- renderDT({
+    if (is.null(lottery_tier_validation) || nrow(lottery_tier_validation) == 0) {
+      return(datatable(tibble(Message = "Re-run nba_lottery.R to generate the published-odds validation table."),
+                       rownames = FALSE, options = list(dom = "t")))
+    }
+
+    tbl <- lottery_tier_validation %>%
+      transmute(
+        Tier = lottery_tier_label,
+        Seeds = ifelse(seed_min == seed_max, as.character(seed_min), sprintf("%d-%d", seed_min, seed_max)),
+        `Sim #1` = sprintf("%.1f%% ± %.1f", 100 * sim_prob_no1, 100 * 1.96 * sim_prob_no1_mc_se),
+        `Pub #1` = sprintf("%.1f%%", 100 * official_prob_no1),
+        `Sim Top 3` = sprintf("%.1f%% ± %.1f", 100 * sim_prob_top3, 100 * 1.96 * sim_prob_top3_mc_se),
+        `Pub Top 3` = sprintf("%.0f%%", 100 * official_prob_top3),
+        `Sim Top 5` = sprintf("%.1f%% ± %.1f", 100 * sim_prob_top5, 100 * 1.96 * sim_prob_top5_mc_se),
+        `Pub Top 5` = sprintf("%.0f%%", 100 * official_prob_top5),
+        `Sim Top 10` = sprintf("%.1f%% ± %.1f", 100 * sim_prob_top10, 100 * 1.96 * sim_prob_top10_mc_se),
+        `Pub Top 10` = sprintf("%.0f%%", 100 * official_prob_top10),
+        `Sim Avg` = sprintf("%.2f ± %.2f", sim_expected_pick, 1.96 * sim_expected_pick_mc_se),
+        `Pub Avg` = sprintf("%.1f", official_expected_pick)
+      )
+
+    datatable(
+      tbl, rownames = FALSE,
+      options = list(pageLength = 4, dom = "t", scrollX = TRUE,
+                     columnDefs = list(list(className = "dt-right", targets = 2:11)))
+    )
   })
 
   # ---- Full table ----
@@ -892,11 +1473,11 @@ server <- function(input, output, session) {
       colorscale = list(c(0, "#0f0f1a"), c(1, "#6d28d9")),
       text = matrix(sprintf("%.1f%%", z), nrow = nrow(z)),
       texttemplate = "%{text}", textfont = list(size = 10, color = "#ddd"),
-      hovertemplate = "from %{y} to %{x}: %{z}%<extra></extra>"
+      hovertemplate = "From %{y} to %{x}<br>Probability: %{z:.1f}%<extra></extra>"
     ) %>%
       plotly_dark(
-        xaxis = list(title = "To tier (next season)", side = "bottom"),
-        yaxis = list(title = "From tier", autorange = "reversed")
+        xaxis = list(title = list(text = "Year t + 1"), side = "bottom"),
+        yaxis = list(title = list(text = "Year t"), autorange = "reversed")
       )
   })
 
@@ -942,32 +1523,219 @@ server <- function(input, output, session) {
     title(main = "", col.main = "#ddd")
   })
 
-  # ---- Pick value curve ----
+  # ---- Pick value curves ----
+  pick_curve_base_plot <- function(pc, x_title, y_title = "4-year Win Shares") {
+    # The curve shows two distinct uncertainty concepts:
+    #   1) EV credible interval = uncertainty around the posterior mean pick value.
+    #   2) Player outcome interval = asymmetric 10th-90th percentile realized outcomes.
+    # Do not use war_sd as the ribbon; that is predictive dispersion and can be
+    # misleading for skewed / option-like pick outcomes, especially in Round 2.
+    for (nm in c("ev_q05", "ev_q50", "ev_q95", "outcome_q10", "outcome_q90")) {
+      if (!nm %in% names(pc)) pc[[nm]] <- NA_real_
+    }
+
+    pc <- pc %>%
+      mutate(
+        ev_q05 = coalesce(.data$ev_q05, .data$expected_war),
+        ev_q50 = coalesce(.data$ev_q50, .data$expected_war),
+        ev_q95 = coalesce(.data$ev_q95, .data$expected_war),
+        has_ev_interval = is.finite(.data$ev_q05) & is.finite(.data$ev_q95),
+        has_outcome_interval = is.finite(.data$outcome_q10) & is.finite(.data$outcome_q90),
+        ev_hover = sprintf(
+          "Pick %s<br>EV: %.1f<br>90%% EV CI: [%.1f, %.1f]",
+          .data$pick, .data$expected_war, .data$ev_q05, .data$ev_q95
+        ),
+        outcome_hover = sprintf(
+          "Pick %s<br>Player outcome 10th-90th: [%.1f, %.1f]",
+          .data$pick, .data$outcome_q10, .data$outcome_q90
+        )
+      )
+
+    p <- plot_ly(pc, x = ~pick)
+
+    if (any(pc$has_ev_interval, na.rm = TRUE)) {
+      p <- p %>%
+        add_ribbons(
+          data = pc %>% filter(.data$has_ev_interval),
+          x = ~pick,
+          ymin = ~ev_q05,
+          ymax = ~ev_q95,
+          name = "90% EV credible interval",
+          text = ~ev_hover,
+          hovertemplate = "%{text}<extra></extra>",
+          line = list(color = "transparent"),
+          fillcolor = "rgba(109,40,217,0.16)"
+        )
+    }
+
+    if (any(pc$has_outcome_interval, na.rm = TRUE)) {
+      p <- p %>%
+        add_ribbons(
+          data = pc %>% filter(.data$has_outcome_interval),
+          x = ~pick,
+          ymin = ~outcome_q10,
+          ymax = ~outcome_q90,
+          name = "Player outcomes 10th-90th",
+          text = ~outcome_hover,
+          hovertemplate = "%{text}<extra></extra>",
+          line = list(color = "transparent"),
+          fillcolor = "rgba(245,158,11,0.13)"
+        )
+    }
+
+    if ("emp_mean" %in% names(pc) && any(is.finite(pc$emp_mean))) {
+      p <- p %>%
+        add_markers(y = ~emp_mean, name = "Empirical slot mean",
+                    marker = list(color = "#f59e0b", size = 6),
+                    hovertemplate = "Pick %{x}<br>Empirical mean: %{y:.1f}<extra></extra>")
+    }
+
+    p %>%
+      add_lines(y = ~expected_war, name = "Posterior mean / EV",
+                line = list(color = "#6d28d9", width = 2.5),
+                hovertemplate = "Pick %{x}<br>EV: %{y:.1f}<extra></extra>") %>%
+      plotly_dark(
+        xaxis = list(title = list(text = x_title), dtick = 5),
+        yaxis = list(title = list(text = y_title), tickformat = ".1f"),
+        legend = list(
+          orientation = "h",
+          x = 0.02,
+          y = 1.18,
+          xanchor = "left",
+          yanchor = "bottom",
+          font = list(size = 9),
+          bgcolor = "rgba(15,15,26,0.86)",
+          bordercolor = "rgba(255,255,255,0.08)",
+          borderwidth = 1
+        ),
+        margin = list(l = 70, r = 40, t = 82, b = 58)
+      )
+  }
+
+  output$pick_curve_plot_r1 <- renderPlotly({
+    pc <- pick_curve %>%
+      filter(.data$pick <= 30) %>%
+      mutate(round = 1L)
+
+    if (nrow(pc) == 0) {
+      return(plot_ly() %>%
+               plotly_dark(
+                 xaxis = list(title = list(text = "Pick")),
+                 yaxis = list(title = list(text = "4-yr Win Shares")),
+                 annotations = list(text = "Round 1 curve unavailable", x = 0.5, y = 0.5,
+                                    xref = "paper", yref = "paper", showarrow = FALSE)))
+    }
+
+    pick_curve_base_plot(pc, x_title = "Pick", y_title = "4-yr Win Shares")
+  })
+
+  output$pick_curve_plot_r2 <- renderPlotly({
+    pc <- pick_curve %>%
+      filter(.data$pick >= 31, .data$pick <= 60) %>%
+      mutate(round = 2L)
+
+    if (nrow(pc) == 0) {
+      return(plot_ly() %>%
+               plotly_dark(
+                 xaxis = list(title = list(text = "Pick")),
+                 yaxis = list(title = list(text = "4-yr Win Shares")),
+                 annotations = list(text = "Round 2 curve unavailable — dashboard_data.rds lacks picks 31-60 / mu_31:mu_60. Rerun 04_lotterySims_.R", x = 0.5, y = 0.5,
+                                    xref = "paper", yref = "paper", showarrow = FALSE)))
+    }
+
+    r2_y_title <- "4-yr Win Shares"
+
+    p <- pick_curve_base_plot(
+      pc,
+      x_title = "Pick",
+      y_title = r2_y_title
+    )
+
+    # The second-round model estimates P(play) in Stan. When p_play is
+    # available, add it on a secondary axis so the plot shows both expected
+    # value and the modeled probability that the pick produces an NBA-minutes
+    # outcome. The pick-value ribbons remain EV CI and outcome quantiles.
+    if ("p_play" %in% names(pc) && any(is.finite(pc$p_play))) {
+      if (all(c("p_play_q05", "p_play_q95") %in% names(pc)) &&
+          any(is.finite(pc$p_play_q05)) && any(is.finite(pc$p_play_q95))) {
+        p <- p %>%
+          add_ribbons(data = pc %>% filter(is.finite(.data$p_play_q05), is.finite(.data$p_play_q95)),
+                      x = ~pick,
+                      ymin = ~(100 * p_play_q05),
+                      ymax = ~(100 * p_play_q95),
+                      name = "90% P(play) interval",
+                      yaxis = "y2",
+                      line = list(color = "transparent"),
+                      fillcolor = "rgba(16,185,129,0.13)",
+                      hovertemplate = "Pick %{x}<br>90% P(play): %{y:.1f}%<extra></extra>")
+      }
+
+      p <- p %>%
+        add_lines(data = pc, x = ~pick, y = ~(100 * p_play),
+                  name = "Modeled P(play) %",
+                  yaxis = "y2",
+                  line = list(color = "#10b981", width = 2, dash = "dot"),
+                  hovertemplate = "Pick %{x}<br>P(play): %{y:.1f}%<extra></extra>")
+
+      if ("emp_p_play" %in% names(pc) && any(is.finite(pc$emp_p_play))) {
+        p <- p %>%
+          add_markers(data = pc %>% filter(is.finite(.data$emp_p_play)),
+                      x = ~pick, y = ~(100 * emp_p_play),
+                      name = "Empirical P(play) %",
+                      yaxis = "y2",
+                      marker = list(color = "#e5e7eb", size = 6, symbol = "x"),
+                      hovertemplate = "Pick %{x}<br>Empirical P(play): %{y:.1f}%<extra></extra>")
+      }
+
+      p <- p %>%
+        layout(
+          # Keep the dual-axis labels readable and prevent the right-side
+          # P(play) title/ticks from being clipped by the card boundary.
+          margin = list(l = 70, r = 150, t = 112, b = 58),
+          yaxis = list(
+            title = list(text = r2_y_title),
+            automargin = TRUE,
+            gridcolor = "#1a1a2a",
+            zerolinecolor = "#333"
+          ),
+          yaxis2 = list(
+            title = list(text = "P(play) %", standoff = 18),
+            overlaying = "y",
+            side = "right",
+            range = c(0, 100),
+            automargin = TRUE,
+            gridcolor = "rgba(0,0,0,0)",
+            zerolinecolor = "#333"
+          ),
+          # Move the legend above the plotting region instead of over the data.
+          legend = list(
+            orientation = "h",
+            x = 0.02,
+            y = 1.30,
+            xanchor = "left",
+            yanchor = "bottom",
+            font = list(size = 9),
+            bgcolor = "rgba(15,15,26,0.86)",
+            bordercolor = "rgba(255,255,255,0.08)",
+            borderwidth = 1
+          )
+        )
+    }
+
+    p
+  })
+
+  # Backward-compatible alias in case an older UI still references the combined
+  # curve output name.
   output$pick_curve_plot <- renderPlotly({
     pc <- pick_curve
-    p <- plot_ly(pc, x = ~pick) %>%
-      add_ribbons(ymin = ~(expected_war - war_sd),
-                  ymax = ~(expected_war + war_sd),
-                  name = "+/- 1 SD",
-                  line = list(color = "transparent"),
-                  fillcolor = "rgba(109,40,217,0.18)")
-    if ("emp_mean" %in% names(pc)) {
-      p <- p %>% add_markers(y = ~emp_mean, name = "Empirical slot mean",
-                             marker = list(color = "#f59e0b", size = 6))
-    }
-    p %>%
-      add_lines(y = ~expected_war, name = "Posterior mean",
-                line = list(color = "#6d28d9", width = 2.5)) %>%
-      plotly_dark(
-        xaxis = list(title = "Draft Pick", dtick = 5),
-        yaxis = list(title = "4-year Win Shares"),
-        legend = list(x = 0.55, y = 0.95, font = list(size = 10))
-      )
+    pick_curve_base_plot(pc, x_title = "Pick", y_title = "4-yr Win Shares")
   })
 
   # ---- Validation panel ----
   output$validation_panel <- renderUI({
     pm <- stan_diag$pick_model
+    pm2 <- stan_diag$pick2_model %||% NULL
     mk <- stan_diag$markov_model
     tags$div(style = "font-size:11px; color:#bbb; line-height:1.7;",
       tags$div(tags$strong(style = "color:#6d28d9;", "Pick-value model")),
@@ -989,6 +1757,12 @@ server <- function(input, output, session) {
         "sigma_base=%.2f | sigma_slope=%.4f", pm$sigma_base, pm$sigma_slope
       )),
       if (!is.null(pm$n_players)) tags$div(sprintf("player rows = %s", format(pm$n_players, big.mark = ","))),
+      if (!is.null(pm2)) tags$div(style = "margin-top:8px;", tags$strong(style = "color:#6d28d9;", "Round-2 hurdle model")),
+      if (!is.null(pm2)) tags$div(sprintf("Curve: %s", pm2$curve_type)),
+      if (!is.null(pm2)) tags$div(sprintf("played rate: empirical %.1f%% | P(play): #31 %.1f%%, #45 %.1f%%, #60 %.1f%%",
+                                           100 * pm2$played_rate, 100 * pm2$p_play_31, 100 * pm2$p_play_45, 100 * pm2$p_play_60)),
+      if (!is.null(pm2)) tags$div(sprintf("max R-hat = %.3f | 90%% PPC coverage = %.0f%%",
+                                           pm2$max_rhat, 100 * pm2$ppc_cover)),
       tags$hr(style = "border-color:#222;"),
       tags$div(tags$strong(style = "color:#6d28d9;", "Markov model")),
       tags$div(sprintf("%s transitions over %d seasons",
@@ -1007,13 +1781,31 @@ server <- function(input, output, session) {
   # TAB 6: SINGLE PICK VALUATION
   # ==========================================================================
 
-  # populate pick choices for the chosen year
+  # populate team and pick choices for the chosen year / team
   observeEvent(input$sp_year, {
+    teams <- pick_display_assets %>%
+      filter(.data$year == as.integer(input$sp_year)) %>%
+      distinct(owner) %>%
+      arrange(owner) %>%
+      pull(owner)
+    if (length(teams) == 0L) {
+      updateSelectInput(session, "sp_team", choices = character(0), selected = character(0))
+    } else {
+      updateSelectInput(session, "sp_team", choices = teams, selected = teams[1])
+    }
+  }, ignoreNULL = FALSE)
+
+  observe({
+    req(input$sp_year, input$sp_team)
     opts <- pick_display_assets %>%
-      filter(year == input$sp_year) %>%
-      arrange(owner, label)
-    choice_vec <- setNames(opts$display_asset_id, opts$label)
-    updateSelectInput(session, "sp_asset", choices = choice_vec)
+      filter(.data$year == as.integer(input$sp_year), .data$owner == input$sp_team) %>%
+      arrange(round, short_label)
+    if (nrow(opts) == 0L) {
+      updateSelectInput(session, "sp_asset", choices = character(0), selected = character(0))
+    } else {
+      choice_vec <- setNames(opts$display_asset_id, opts$short_label)
+      updateSelectInput(session, "sp_asset", choices = choice_vec, selected = opts$display_asset_id[1])
+    }
   })
 
   sp_row <- reactive({
@@ -1031,36 +1823,87 @@ server <- function(input, output, session) {
     pick_display_value_ev_summary %>% filter(display_asset_id == input$sp_asset)
   })
 
+  swap_exercise_summary_for_display <- function(r, system = c("cur", "new")) {
+    system <- match.arg(system)
+    text <- paste(r$label %||% "", r$obligation %||% "", r$notes %||% "")
+    origs <- split_abbrs(r$member_original_teams)
+    terms <- extract_swap_terms_from_text(text, origs, r$owner)
+    if (is.na(terms$holder) || is.na(terms$target)) return(NULL)
+    arr <- team_slot_array_for_round_app(r$round, system)
+    yr <- as.character(r$year)
+    if (is.null(arr) || is.null(dimnames(arr)[[2]]) || is.null(dimnames(arr)[[3]])) return(NULL)
+    if (!all(c(terms$holder, terms$target) %in% dimnames(arr)[[2]]) || !yr %in% dimnames(arr)[[3]]) return(NULL)
+    holder_slot <- arr[, terms$holder, yr]
+    target_slot <- arr[, terms$target, yr]
+    exercised <- !is.na(holder_slot) & !is.na(target_slot) &
+      target_slot < holder_slot &
+      target_slot >= terms$min_pick & target_slot <= terms$max_pick
+    probability_summary_from_indicator(exercised)
+  }
+
+  prob_box <- function(title, stat, col) {
+    if (is.null(stat) || nrow(stat) == 0 || is.na(stat$prob)) return(NULL)
+    tags$div(style = sprintf(
+      "flex:1; min-width:0; padding:8px; border:1px solid #1a1a2a; border-radius:8px; border-left:3px solid %s;", col),
+      tags$div(style = "font-size:10px; color:#888; white-space:nowrap;", title),
+      tags$div(style = sprintf("font-size:18px; font-weight:700; color:%s;", col),
+               sprintf("%.1f%%", 100 * stat$prob)),
+      tags$div(style = "font-size:9px; color:#aaa; white-space:nowrap;",
+               sprintf("90%% CI [%.1f%%, %.1f%%]", 100 * stat$q05, 100 * stat$q95)))
+  }
+
+  prob_card_row <- function(label, cur_stat, new_stat) {
+    tags$div(style = "margin-top:10px;",
+      tags$div(style = "font-size:11px; font-weight:700; color:#d0d0d0; margin-bottom:5px;", label),
+      tags$div(style = "display:flex; gap:8px; align-items:stretch; flex-wrap:nowrap;",
+        prob_box("Current", cur_stat, "#3b82f6"),
+        prob_box("3-2-1", new_stat, "#f59e0b")
+      )
+    )
+  }
+
   output$sp_obligation <- renderUI({
     r <- sp_row()
     s <- sp_stats_outcome()
     if (nrow(r) == 0) return(NULL)
 
-    prob_txt <- if (nrow(s) > 0 && "new_convey_prob" %in% names(s)) {
-      sprintf("Modeled allocation probability: current %.0f%% | 3-2-1 %.0f%%",
-              100 * s$cur_convey_prob, 100 * s$new_convey_prob)
-    } else {
-      NULL
-    }
+    convey_cur <- if (r$display_asset_id %in% colnames(display_convey_cur_draws)) {
+      probability_summary_from_indicator(display_convey_cur_draws[, r$display_asset_id] > 0)
+    } else if (nrow(s) > 0 && "cur_convey_prob" %in% names(s)) {
+      tibble(prob = s$cur_convey_prob, q05 = s$cur_convey_prob, q95 = s$cur_convey_prob)
+    } else NULL
+
+    convey_new <- if (r$display_asset_id %in% colnames(display_convey_new_draws)) {
+      probability_summary_from_indicator(display_convey_new_draws[, r$display_asset_id] > 0)
+    } else if (nrow(s) > 0 && "new_convey_prob" %in% names(s)) {
+      tibble(prob = s$new_convey_prob, q05 = s$new_convey_prob, q95 = s$new_convey_prob)
+    } else NULL
+
+    swap_cur <- swap_exercise_summary_for_display(r, "cur")
+    swap_new <- swap_exercise_summary_for_display(r, "new")
 
     expected_count_txt <- if (nrow(s) > 0 && all(c("cur_expected_pick_count", "new_expected_pick_count") %in% names(s))) {
-      sprintf("Expected pick count: current %.2f | 3-2-1 %.2f",
+      sprintf("Expected Pick Count: current %.1f | 3-2-1 %.1f",
               s$cur_expected_pick_count, s$new_expected_pick_count)
     } else {
       NULL
     }
 
-    tags$div(style = "font-size:11px; color:#aaa; line-height:1.7;",
+    line_div <- function(..., extra_style = "") tags$div(style = paste0("margin-bottom:10px;", extra_style), ...)
+
+    tags$div(style = "font-size:11px; color:#aaa; line-height:1.55;",
       tags$div(tags$strong(style = "color:#6d28d9;", "Pick details")),
-      tags$div(sprintf("%s entitlement", r$owner)),
-      tags$div(sprintf("Original pick(s): %s", r$member_original_teams)),
-      tags$div(sprintf("Obligation: %s", r$obligation)),
-      if (!is.null(prob_txt)) tags$div(prob_txt),
-      if (!is.null(expected_count_txt)) tags$div(expected_count_txt),
+      line_div(sprintf("Current Team: %s", r$owner)),
+      line_div(sprintf("Original Team%s: %s", ifelse(str_detect(r$member_original_teams, ","), "s", ""), r$member_original_teams)),
+      if (!is.na(r$fixed_slot_display)) line_div(tags$span(style = "color:#10b981;", sprintf("Actual Pick: %s", r$fixed_slot_display))),
+      line_div(sprintf("Obligation: %s", r$obligation)),
+      prob_card_row("Conveyance Probability", convey_cur, convey_new),
+      if (!is.null(swap_cur) || !is.null(swap_new)) prob_card_row("Swap Exercise Probability", swap_cur, swap_new),
+      if (!is.null(expected_count_txt)) line_div(expected_count_txt, extra_style = "color:#888; margin-top:10px;"),
       if (!is.na(r$group_type) && r$group_type != "single_asset")
-        tags$div(style = "color:#f59e0b;", "Grouped RealGM-style entitlement; underlying conditional legs are modeled internally."),
+        line_div("Grouped RealGM-style entitlement; underlying conditional legs are modeled internally.", extra_style = "color:#f59e0b;"),
       if (r$year == 2026)
-        tags$div(style = "color:#10b981;", "Locked to the actual 2026 draft result"))
+        line_div("Locked to the actual 2026 draft result", extra_style = "color:#10b981;"))
   })
 
   output$sp_headline <- renderUI({
@@ -1123,11 +1966,11 @@ server <- function(input, output, session) {
       add_lines(data = cur_density, x = ~x, y = ~density,
                 name = "Current", fill = "tozeroy",
                 line = list(color = "#3b82f6", width = 2.5),
-                hovertemplate = sprintf("Current %s<br>WS: %%{x:.1f}<br>Density: %%{y:.3f}<extra></extra>", hover_label)) %>%
+                hovertemplate = sprintf("Current %s<br>WS: %%{x:.1f}<br>Density: %%{y:.1f}<extra></extra>", hover_label)) %>%
       add_lines(data = new_density, x = ~x, y = ~density,
                 name = "3-2-1", fill = "tozeroy",
                 line = list(color = "#f59e0b", width = 2.5),
-                hovertemplate = sprintf("3-2-1 %s<br>WS: %%{x:.1f}<br>Density: %%{y:.3f}<extra></extra>", hover_label)) %>%
+                hovertemplate = sprintf("3-2-1 %s<br>WS: %%{x:.1f}<br>Density: %%{y:.1f}<extra></extra>", hover_label)) %>%
       layout(
         paper_bgcolor = "rgba(0,0,0,0)", plot_bgcolor = "#0f0f1a",
         font = list(family = "IBM Plex Mono", color = "#999"),
@@ -1174,18 +2017,18 @@ server <- function(input, output, session) {
   picks_owned_by <- function(team) {
     pick_display_assets %>%
       filter(owner == team) %>%
-      arrange(year, label)
+      arrange(year, round, short_label)
   }
 
   observeEvent(input$tm_teamA, {
     opts <- picks_owned_by(input$tm_teamA)
-    updateSelectizeInput(session, "tm_picksA",
-      choices = setNames(opts$display_asset_id, opts$label), server = TRUE)
+    choices <- if (nrow(opts) == 0L) character(0) else setNames(opts$display_asset_id, opts$trade_label)
+    updateSelectizeInput(session, "tm_picksA", choices = choices, selected = character(0), server = TRUE)
   })
   observeEvent(input$tm_teamB, {
     opts <- picks_owned_by(input$tm_teamB)
-    updateSelectizeInput(session, "tm_picksB",
-      choices = setNames(opts$display_asset_id, opts$label), server = TRUE)
+    choices <- if (nrow(opts) == 0L) character(0) else setNames(opts$display_asset_id, opts$trade_label)
+    updateSelectizeInput(session, "tm_picksB", choices = choices, selected = character(0), server = TRUE)
   })
 
   # ---- per-pick obligation controls (always shown for eligible picks) ----
@@ -1220,7 +2063,7 @@ server <- function(input, output, session) {
         locked <- r$year == 2026
         eligible <- display_is_single_leg(did) && !locked
         tags$div(style = "margin-bottom:8px; font-size:11px; color:#aaa;",
-          tags$div(tags$strong(r$label),
+          tags$div(tags$strong(r$trade_label),
             if (locked) tags$span(style = "color:#10b981;",
                                   " (2026 locked — obligations N/A)"),
             if (!eligible && !locked) tags$span(style = "color:#f59e0b;",
@@ -1249,7 +2092,8 @@ server <- function(input, output, session) {
           sprintf(" | alloc %.0f%%", 100 * pvs$new_convey_prob)
         } else ""
         tags$div(
-          tags$strong(r$label),
+          tags$strong(r$trade_label),
+          if (!is.na(r$fixed_slot_display)) tags$span(style = "color:#10b981;", sprintf(" (%s)", r$fixed_slot_display)),
           tags$span(style = "color:#888;", sprintf(" [%s%s]", r$obligation, prob_txt)))
       }))
   }
@@ -1276,10 +2120,40 @@ server <- function(input, output, session) {
     if (protection == "lottery") return(pos > 14)
     if (protection == "top16")   return(pos > 16)
     if (protection == "top20")   return(pos > 20)
+    m <- stringr::str_match(protection, "^protected(\\d+)_(\\d+)$")
+    if (!is.na(m[1, 1])) {
+      lo <- as.integer(m[1, 2]); hi <- as.integer(m[1, 3])
+      return(!(pos >= lo & pos <= hi))
+    }
+    m <- stringr::str_match(protection, "^convey(\\d+)_(\\d+)$")
+    if (!is.na(m[1, 1])) {
+      lo <- as.integer(m[1, 2]); hi <- as.integer(m[1, 3])
+      return(pos >= lo & pos <= hi)
+    }
     rep(TRUE, length(pos))
   }
 
   zero_trade_vec <- function() rep(0, nrow(asset_new_draws))
+
+  team_slot_array_for_round <- function(round, system = c("new", "cur")) {
+    system <- match.arg(system)
+    if (as.integer(round) == 2L) {
+      arr <- if (system == "new") team_slot2_new_draws else team_slot2_cur_draws
+      if (!is.null(arr)) return(arr)
+    }
+    if (system == "new") team_slot_new_draws else team_slot_cur_draws
+  }
+
+  receiver_slot_vec <- function(receiver, yr, round, system = "new") {
+    arr <- team_slot_array_for_round(round, system)
+    yc <- as.character(yr)
+    if (!is.null(arr) && !is.null(dimnames(arr)[[2]]) &&
+        receiver %in% dimnames(arr)[[2]] &&
+        yc %in% dimnames(arr)[[3]]) {
+      return(arr[, receiver, yc])
+    }
+    rep(NA_real_, nrow(asset_new_draws))
+  }
 
   underlying_pick_ev_base <- function(aid) {
     r <- pick_assets %>% filter(asset_id == aid)
@@ -1314,7 +2188,7 @@ server <- function(input, output, session) {
 
     if (swap) {
       og_slot <- asset_slot_new_draws[, aid]
-      rc_slot <- team_slot_new_draws[, receiver, yc]
+      rc_slot <- receiver_slot_vec(receiver, r$year, r$round, "new")
       val_og <- slot_value_vec(og_slot)
       val_rc <- slot_value_vec(rc_slot)
       eligible <- pick_conveys_app(og_slot, prot)
@@ -1325,10 +2199,9 @@ server <- function(input, output, session) {
     }
 
     if (!is.null(prot) && prot != "none") {
-      N <- protection_floor_app(prot)
       og_slot <- asset_slot_new_draws[, aid]
       raw_ev <- slot_value_vec(og_slot)
-      out <- ifelse(!is.na(og_slot) & og_slot > N, raw_ev, 0)
+      out <- ifelse(!is.na(og_slot) & pick_conveys_app(og_slot, prot), raw_ev, 0)
       out[is.na(out)] <- 0
       return(out)
     }
@@ -1342,9 +2215,13 @@ server <- function(input, output, session) {
     base
   }
 
-  receiver_raw_outcome_vec <- function(receiver, yr) {
+  receiver_raw_outcome_vec <- function(receiver, yr, round) {
     cand <- pick_assets %>%
-      filter(.data$year == as.integer(.env$yr), .data$original_team == .env$receiver)
+      filter(.data$year == as.integer(.env$yr),
+             .data$round == as.integer(.env$round),
+             .data$original_team == .env$receiver,
+             .data$owner == .env$receiver) %>%
+      arrange(pick_type != "own")
     if (nrow(cand) > 0) {
       aid_receiver <- cand$asset_id[1]
       if (aid_receiver %in% colnames(asset_raw_new_draws)) {
@@ -1354,16 +2231,9 @@ server <- function(input, output, session) {
       }
     }
 
-    yc <- as.character(yr)
-    if (!is.null(dimnames(team_slot_new_draws)[[2]]) &&
-        receiver %in% dimnames(team_slot_new_draws)[[2]] &&
-        yc %in% dimnames(team_slot_new_draws)[[3]]) {
-      out <- slot_value_vec(team_slot_new_draws[, receiver, yc])
-      out[is.na(out)] <- 0
-      return(out)
-    }
-
-    zero_trade_vec()
+    out <- slot_value_vec(receiver_slot_vec(receiver, yr, round, "new"))
+    out[is.na(out)] <- 0
+    out
   }
 
   sent_pick_outcome_value <- function(aid, side, receiver, ctrl_id = aid) {
@@ -1381,9 +2251,9 @@ server <- function(input, output, session) {
 
     if (swap) {
       og_slot <- asset_slot_new_draws[, aid]
-      rc_slot <- team_slot_new_draws[, receiver, yc]
+      rc_slot <- receiver_slot_vec(receiver, r$year, r$round, "new")
       raw_og <- asset_raw_new_draws[, aid]
-      raw_rc <- receiver_raw_outcome_vec(receiver, r$year)
+      raw_rc <- receiver_raw_outcome_vec(receiver, r$year, r$round)
       eligible <- pick_conveys_app(og_slot, prot)
       sent_pick_is_better <- !is.na(og_slot) & !is.na(rc_slot) & og_slot < rc_slot
       out <- ifelse(eligible & sent_pick_is_better, raw_og - raw_rc, 0)
@@ -1392,10 +2262,9 @@ server <- function(input, output, session) {
     }
 
     if (!is.null(prot) && prot != "none") {
-      N <- protection_floor_app(prot)
       og_slot <- asset_slot_new_draws[, aid]
       raw_outcome <- asset_raw_new_draws[, aid]
-      out <- ifelse(!is.na(og_slot) & og_slot > N, raw_outcome, 0)
+      out <- ifelse(!is.na(og_slot) & pick_conveys_app(og_slot, prot), raw_outcome, 0)
       out[is.na(out)] <- 0
       return(out)
     }
@@ -1459,6 +2328,29 @@ server <- function(input, output, session) {
     rowSums(cols)
   }
 
+  side_outcome_component_matrix <- function(ids, side, receiver) {
+    n <- nrow(asset_new_draws)
+    if (is.null(ids) || length(ids) == 0) {
+      return(matrix(numeric(0), nrow = n, ncol = 0))
+    }
+    cols <- vapply(ids, function(did) sent_display_outcome_value(did, side, receiver),
+                   numeric(n))
+    if (is.null(dim(cols))) {
+      cols <- matrix(cols, nrow = n, ncol = 1)
+    }
+    colnames(cols) <- ids
+    cols
+  }
+
+  row_max_or_neginf <- function(mat) {
+    if (is.null(mat) || ncol(mat) == 0L) {
+      return(rep(-Inf, nrow(asset_new_draws)))
+    }
+    out <- apply(mat, 1, max, na.rm = TRUE)
+    out[!is.finite(out)] <- -Inf
+    out
+  }
+
   trade_draws <- reactive({
     idsA <- input$tm_picksA
     idsB <- input$tm_picksB
@@ -1471,11 +2363,25 @@ server <- function(input, output, session) {
     A_out_outcome <- side_outcome_value(idsA, "A", receiver = input$tm_teamB)
     B_out_outcome <- side_outcome_value(idsB, "B", receiver = input$tm_teamA)
 
+    # Per-pick realized outcome comparison after the trade. Team A receives the
+    # picks selected on Team B's side, and Team B receives the picks selected on
+    # Team A's side. This estimates who gets the single best player outcome, not
+    # just the larger aggregate package.
+    A_receives_components <- side_outcome_component_matrix(idsB, "B", receiver = input$tm_teamA)
+    B_receives_components <- side_outcome_component_matrix(idsA, "A", receiver = input$tm_teamB)
+    A_best_outcome <- row_max_or_neginf(A_receives_components)
+    B_best_outcome <- row_max_or_neginf(B_receives_components)
+    A_has_pick <- is.finite(A_best_outcome)
+    B_has_pick <- is.finite(B_best_outcome)
+
     tibble(
       net_to_A_ev      = B_out_ev - A_out_ev,
       net_to_B_ev      = A_out_ev - B_out_ev,
       net_to_A_outcome = B_out_outcome - A_out_outcome,
-      net_to_B_outcome = A_out_outcome - B_out_outcome
+      net_to_B_outcome = A_out_outcome - B_out_outcome,
+      best_outcome_to_A = A_has_pick & (!B_has_pick | A_best_outcome > B_best_outcome),
+      best_outcome_to_B = B_has_pick & (!A_has_pick | B_best_outcome > A_best_outcome),
+      best_outcome_tie  = A_has_pick & B_has_pick & A_best_outcome == B_best_outcome
     )
   })
 
@@ -1498,46 +2404,111 @@ server <- function(input, output, session) {
     pB_outcome  <- mean(d$net_to_A_outcome < 0)
     pTie_outcome <- mean(d$net_to_A_outcome == 0)
 
-    winner <- if (abs(eA_ev) < 1e-8) "Neither team" else if (eA_ev > 0) input$tm_teamA else input$tm_teamB
-    wcol   <- if (abs(eA_ev) < 1e-8) "#aaa" else if (eA_ev > 0) "#10b981" else "#ef4444"
+    pA_best_outcome <- mean(d$best_outcome_to_A, na.rm = TRUE)
+    pB_best_outcome <- mean(d$best_outcome_to_B, na.rm = TRUE)
+    pBest_tie <- mean(d$best_outcome_tie, na.rm = TRUE)
+
+    best_prob_ci <- function(x) {
+      x <- as.logical(x)
+      x <- x[!is.na(x)]
+      n <- length(x)
+      if (n == 0L) return(c(NA_real_, NA_real_))
+      k <- sum(x)
+      stats::qbeta(c(0.05, 0.95), k + 1, n - k + 1)
+    }
+
+    pA_best_ci <- best_prob_ci(d$best_outcome_to_A)
+    pB_best_ci <- best_prob_ci(d$best_outcome_to_B)
+    pBest_tie_ci <- best_prob_ci(d$best_outcome_tie)
+
+    best_team <- if (pA_best_outcome >= pB_best_outcome) input$tm_teamA else input$tm_teamB
+    best_prob <- max(pA_best_outcome, pB_best_outcome, na.rm = TRUE)
+    best_ci <- if (identical(best_team, input$tm_teamA)) pA_best_ci else pB_best_ci
+    best_col <- if (identical(best_team, input$tm_teamA)) "#3b82f6" else "#f59e0b"
+
     edge_team <- if (abs(eA_ev) < 1e-8) "neither team" else if (eA_ev > 0) input$tm_teamA else input$tm_teamB
-    edge_val  <- abs(eA_ev)
+    wcol <- if (abs(eA_ev) < 1e-8) "#aaa" else if (eA_ev > 0) "#10b981" else "#ef4444"
+    edge_val <- abs(eA_ev)
 
-    ev_prob_text <- if (pTie_ev > 0.001) {
-      sprintf("P(%s higher EV) = %.0f%% | P(%s higher EV) = %.0f%% | tie = %.0f%%",
-              input$tm_teamA, 100 * pA_ev,
-              input$tm_teamB, 100 * pB_ev,
-              100 * pTie_ev)
-    } else {
-      sprintf("P(%s higher EV) = %.0f%% | P(%s higher EV) = %.0f%%",
-              input$tm_teamA, 100 * pA_ev,
-              input$tm_teamB, 100 * pB_ev)
+    metric_card <- function(title, value, q05, q95, col, subtitle) {
+      tags$div(style = sprintf(
+        "flex:1; min-width:220px; padding:14px; border:1px solid #1a1a2a; border-radius:10px; border-left:4px solid %s; background:rgba(15,15,26,0.72);", col),
+        tags$div(style = "font-size:11px; color:#888;", title),
+        tags$div(style = sprintf("font-size:30px; line-height:1.1; font-weight:800; color:%s;", col),
+                 sprintf("%+.1f", value)),
+        tags$div(style = "font-size:11px; color:#aaa; margin-top:4px;",
+                 sprintf("90%% CI: [%+.1f, %+.1f] WS", q05, q95)),
+        tags$div(style = "font-size:10px; color:#777; margin-top:4px;", subtitle)
+      )
     }
 
-    outcome_prob_text <- if (pTie_outcome > 0.001) {
-      sprintf("P(%s's received pick(s) produce more realized 4-yr WS) = %.0f%% | P(%s) = %.0f%% | tie = %.0f%%",
-              input$tm_teamA, 100 * pA_outcome,
-              input$tm_teamB, 100 * pB_outcome,
-              100 * pTie_outcome)
-    } else {
-      sprintf("P(%s's received pick(s) produce more realized 4-yr WS) = %.0f%% | P(%s) = %.0f%%",
-              input$tm_teamA, 100 * pA_outcome,
-              input$tm_teamB, 100 * pB_outcome)
+    prob_card <- function(label, p, col) {
+      tags$div(style = sprintf(
+        "flex:1; min-width:140px; padding:10px 12px; border:1px solid #1a1a2a; border-radius:8px; border-left:3px solid %s;", col),
+        tags$div(style = "font-size:10px; color:#888; white-space:nowrap;", label),
+        tags$div(style = sprintf("font-size:22px; font-weight:800; color:%s;", col), sprintf("%.1f%%", 100 * p))
+      )
     }
 
-    tags$div(style = "font-size:12px; color:#bbb; line-height:1.8;",
-      tags$div(style = "font-size:14px;",
-        tags$strong(style = sprintf("color:%s;", wcol),
-          sprintf("Expected asset edge to %s", edge_team)),
-        sprintf(" — %+.1f WS to %s", edge_val, edge_team)),
-      tags$div(sprintf("90%% posterior interval on expected asset edge to %s: [%+.1f, %+.1f] WS",
-                       input$tm_teamA, q05_ev, q95_ev)),
-      tags$div(ev_prob_text),
-      tags$hr(style = "border-color:#1a1a2a; margin:8px 0;"),
-      tags$div(tags$strong("Realized player-outcome simulation")),
-      tags$div(sprintf("Mean realized-outcome net to %s: %+.1f WS | 90%% interval: [%+.1f, %+.1f] WS",
-                       input$tm_teamA, eA_outcome, q05_outcome, q95_outcome)),
-      tags$div(outcome_prob_text),
+    best_outcome_card <- function() {
+      tags$div(style = sprintf(
+        paste0(
+          "grid-column:3; grid-row:1 / span 2; min-width:260px; padding:14px; ",
+          "border:1px solid #1a1a2a; border-radius:10px; border-left:4px solid %s; ",
+          "background:rgba(15,15,26,0.72); display:flex; flex-direction:column; ",
+          "justify-content:center; min-height:138px; box-sizing:border-box;"
+        ), best_col),
+        tags$div(style = "font-size:11px; color:#888;", "Best player outcome"),
+        tags$div(style = sprintf("font-size:30px; line-height:1.1; font-weight:800; color:%s;", best_col),
+                 sprintf("%s %.1f%%", best_team, 100 * best_prob)),
+        tags$div(style = "font-size:11px; color:#aaa; margin-top:4px;",
+                 sprintf("90%% CI: [%.1f%%, %.1f%%]", 100 * best_ci[1], 100 * best_ci[2])),
+        tags$div(style = "font-size:11px; color:#aaa; margin-top:4px;",
+                 sprintf("%s %.1f%% [%.1f%%, %.1f%%] | %s %.1f%% [%.1f%%, %.1f%%] | tie %.1f%% [%.1f%%, %.1f%%]",
+                         input$tm_teamA, 100 * pA_best_outcome, 100 * pA_best_ci[1], 100 * pA_best_ci[2],
+                         input$tm_teamB, 100 * pB_best_outcome, 100 * pB_best_ci[1], 100 * pB_best_ci[2],
+                         100 * pBest_tie, 100 * pBest_tie_ci[1], 100 * pBest_tie_ci[2])),
+        tags$div(style = "font-size:10px; color:#777; margin-top:4px;",
+                 "Probability of receiving the single highest realized 4-yr WS outcome among selected picks")
+      )
+    }
+
+    tags$div(style = "font-size:12px; color:#bbb; line-height:1.7;",
+      tags$div(
+        style = paste(
+          "display:grid;",
+          "grid-template-columns:minmax(220px, 1fr) minmax(220px, 1fr) minmax(260px, 1fr);",
+          "grid-template-rows:auto auto;",
+          "gap:12px; align-items:stretch; margin-bottom:12px;"
+        ),
+        tags$div(style = "grid-column:1; grid-row:1; min-width:0;",
+          metric_card(
+            sprintf("Expected asset edge to %s", edge_team),
+            ifelse(edge_team == input$tm_teamA, eA_ev, ifelse(edge_team == input$tm_teamB, -eA_ev, 0)),
+            ifelse(edge_team == input$tm_teamA, q05_ev, ifelse(edge_team == input$tm_teamB, -q95_ev, q05_ev)),
+            ifelse(edge_team == input$tm_teamA, q95_ev, ifelse(edge_team == input$tm_teamB, -q05_ev, q95_ev)),
+            wcol,
+            sprintf("Mean edge: %.1f WS", edge_val)
+          )
+        ),
+        tags$div(style = "grid-column:2; grid-row:1; min-width:0;",
+          metric_card(
+            sprintf("Realized outcome net to %s", input$tm_teamA),
+            eA_outcome, q05_outcome, q95_outcome,
+            ifelse(eA_outcome >= 0, "#10b981", "#ef4444"),
+            "Sampled player-level 4-yr WS outcomes"
+          )
+        ),
+        best_outcome_card(),
+        tags$div(style = "grid-column:1 / span 2; grid-row:2; display:flex; gap:10px; flex-wrap:wrap; min-width:0;",
+          prob_card(sprintf("%s higher EV", input$tm_teamA), pA_ev, "#3b82f6"),
+          prob_card(sprintf("%s higher EV", input$tm_teamB), pB_ev, "#f59e0b"),
+          if (pTie_ev > 0.001) prob_card("EV tie", pTie_ev, "#9ca3af"),
+          prob_card(sprintf("%s better outcome", input$tm_teamA), pA_outcome, "#3b82f6"),
+          prob_card(sprintf("%s better outcome", input$tm_teamB), pB_outcome, "#f59e0b"),
+          if (pTie_outcome > 0.001) prob_card("Outcome tie", pTie_outcome, "#9ca3af")
+        )
+      ),
       tags$div(style = "color:#888; margin-top:6px;",
         sprintf("A sends %d pick(s); B sends %d pick(s). EV uses posterior mean slot curves; realized outcome uses sampled player-level 4-yr WS draws, so a later pick can still beat an earlier pick ex post.",
                 length(input$tm_picksA %||% character(0)),
@@ -1554,7 +2525,7 @@ server <- function(input, output, session) {
                 name = "Density", fill = "tozeroy",
                 line = list(color = line_color, width = 2.5),
                 fillcolor = fill_color,
-                hovertemplate = "Net WS: %{x:.1f}<br>Density: %{y:.3f}<extra></extra>") %>%
+                hovertemplate = "Net WS: %{x:.1f}<br>Density: %{y:.1f}<extra></extra>") %>%
       layout(
         paper_bgcolor = "rgba(0,0,0,0)", plot_bgcolor = "#0f0f1a",
         font = list(family = "IBM Plex Mono", color = "#999"),

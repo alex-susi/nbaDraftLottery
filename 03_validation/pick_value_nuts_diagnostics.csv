@@ -1,5 +1,0 @@
-model,.chain,n_draws,divergences,pct_divergent,max_treedepth_hits,pct_max_treedepth,max_treedepth_observed,mean_accept_stat,min_accept_stat,mean_stepsize,max_n_leapfrog,ebfmi,flag_divergences,flag_treedepth,flag_ebfmi
-pick_value,1,2000,0,0,0,0,7,0.9777225545,0.690077,0.041673,127,0.8897130860294268,FALSE,FALSE,FALSE
-pick_value,2,2000,0,0,0,0,6,0.9577071335,0.370436,0.0587377,127,0.8405489109572524,FALSE,FALSE,FALSE
-pick_value,3,2000,0,0,0,0,6,0.92528720998,0.00717516,0.0758759,63,0.8798812166695482,FALSE,FALSE,FALSE
-pick_value,4,2000,0,0,0,0,7,0.963104655,0.354842,0.0568027,191,0.9110028937959798,FALSE,FALSE,FALSE

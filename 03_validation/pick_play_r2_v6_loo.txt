@@ -1,0 +1,13 @@
+
+Computed from 8000 by 1055 log-likelihood matrix.
+
+         Estimate   SE
+elpd_loo  -2495.8 47.0
+p_loo        20.7  2.1
+looic      4991.5 94.0
+------
+MCSE of elpd_loo is 0.1.
+MCSE and ESS estimates assume MCMC draws (r_eff in [0.5, 1.5]).
+
+All Pareto k estimates are good (k < 0.7).
+See help('pareto-k-diagnostic') for details.

@@ -1,5 +1,0 @@
-model,.chain,n_draws,divergences,pct_divergent,max_treedepth_hits,pct_max_treedepth,max_treedepth_observed,mean_accept_stat,min_accept_stat,mean_stepsize,max_n_leapfrog,ebfmi,flag_divergences,flag_treedepth,flag_ebfmi
-markov,1,2000,0,0,0,0,4,0.9160117085325123,2.24798e-10,0.414752,15,0.920483330731545,FALSE,FALSE,FALSE
-markov,2,2000,0,0,0,0,3,0.8906782623135,1.07327e-4,0.477855,15,0.9943609485464957,FALSE,FALSE,FALSE
-markov,3,2000,0,0,0,0,4,0.925801671,0.0645111,0.396311,31,1.0008462814086816,FALSE,FALSE,FALSE
-markov,4,2000,0,0,0,0,4,0.854823687715,0.0043373,0.504383,15,1.027568002040446,FALSE,FALSE,FALSE
