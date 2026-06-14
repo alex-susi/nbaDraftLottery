@@ -74,7 +74,7 @@ $$m_p = m_{p-1} + d_m + \tau_m z^{m}_p, \qquad m_p \in \mathbb{R}$$
  
 $$\log s_p = \log s_{p-1} + \tau_s z^{s}_p, \qquad s_p > 0$$
  
-$$z^{\pi}_p,\, z^{m}_p,\, z^{s}_p \sim \mathcal{N}(0,1), \qquad z^{\pi}_p,\, z^{m}_p,\, z^{s}_p \in \mathbb{R}$$
+$$z^{\pi}_p\, z^{m}_p\, z^{s}_p \sim \mathcal{N}(0,1), \qquad z^{\pi}_p\, z^{m}_p\, z^{s}_p \in \mathbb{R}$$
  
 $$d_\pi,\, d_m \sim \mathcal{N}(0,\ \cdot), \qquad d_\pi,\, d_m \in \mathbb{R}$$
  
@@ -120,9 +120,9 @@ $$
 \qquad \alpha_{ij} > 0
 $$
  
-with the observed transition counts entering as data, $\mathrm{counts}_{ij} \in \mathbb{Z}_{\ge 0}$.
+with the observed transition counts entering as data, $\mathrm{counts}_{ij} \in \mathbb{Z}_{\geq 0}$.
 
-where, for tiers $i, j \in \{\text{relegation},\ \text{non-play-in},\ \text{play-in seed},\ \text{play-in loser},\ \text{playoff}\}$:
+where, for tiers $i, j \in \lbrace \text{relegation},\ \text{non-play-in},\ \text{play-in seed},\ \text{play-in loser},\ \text{playoff} \rbrace$:
  
 - $\theta_{i\cdot}$ — the $i$-th row of the $5\times5$ transition matrix; a simplex giving $P(\text{tier}_{t+1}=j \mid \text{tier}_t=i)$.
 - $\text{counts}_{ij}$ — observed historical count of season-over-season transitions $i \to j$ (2005–2026 standings).
