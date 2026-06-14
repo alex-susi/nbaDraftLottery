@@ -90,7 +90,7 @@ $$\kappa - 1 \sim \text{Half-}\mathcal{N}(0,\ \cdot), \qquad \kappa \ge 1$$
  
 where, for player $n$ at slot $p[n] \in \{31,\dots,60\}$:
  
-- $\pi_p$ — probability a slot-$p$ pick records any NBA production; the hurdle gate.
+- $\pi_p$ — probability a slot $p$ pick records any NBA production; the hurdle gate.
 - $\text{floor}$ — fixed negative shift placing the lognormal support a few Win Shares below the worst observed played-player outcome, so $\text{ws4}_n - \text{floor} > 0$ and the log scale is always valid.
 - $m_p$ — log-median of the *typical* played-player outcome at slot $p$.
 - $s_p$ — lognormal dispersion of the typical component.
@@ -129,7 +129,7 @@ where, for tiers $i,j \in \{\text{relegation},\ \text{non-play-in},\ \text{play-
 - $\alpha_{ij}$ — Dirichlet prior concentration: largest on the diagonal (stay), smaller for adjacent tiers, and decaying with tier distance, with a strictly nonzero floor so rare jumps (e.g. relegation → playoff) are not assigned probability exactly zero and the model is not overconfident that bad teams stay bad.
 To project forward, each team is seeded in its actual 2025–26 tier and the chain is evolved year by year; the stationary distribution and mixing time (from the second eigenvalue $\lambda_2$) confirm that current standing washes out toward the league baseline within a few seasons, which is reflected in the widening uncertainty on far-future picks.
  
-A Monte Carlo engine then projects each team's tier forward, runs both lotteries, applies all protections/swaps/restrictions, and values every pick under each system.
+A Monte Carlo simulation then projects each team's tier forward, runs both lotteries, applies all protections/swaps/restrictions, and values every pick under each system.
  
  
 ## Validation
