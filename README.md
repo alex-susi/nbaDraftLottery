@@ -1,4 +1,4 @@
-# Probabilistic Draft Pick Valuations Under the NBA's New 3-2-1 Lottery Rules
+# Probabilistic NBA Draft Pick Valuations Under the New 3-2-1 Lottery
 
 A fully Bayesian pipeline for valuing NBA draft picks under the league's new **3-2-1 lottery format** (approved by the NBA Board of Governors in May 2026, effective for the 2027–2029 drafts). Every pick is valued with full posterior uncertainty, picks are re-priced under both the old and new lottery systems, and a trade machine lets you compare any deal with correlated within-simulation draws.
 
@@ -120,9 +120,9 @@ $$
 \qquad \alpha_{ij} > 0
 $$
  
-with the observed transition counts entering as data, $\text{counts}_{ij} \in \mathbb{Z}_{\ge 0}$.
- 
-where, for tiers $i,j \in \{\text{relegation},\ \text{non-play-in},\ \text{play-in seed},\ \text{play-in loser},\ \text{playoff}\}$:
+with the observed transition counts entering as data, $\mathrm{counts}_{ij} \in \mathbb{Z}_{\ge 0}$.
+
+where, for tiers $i, j \in \{\text{relegation},\ \text{non-play-in},\ \text{play-in seed},\ \text{play-in loser},\ \text{playoff}\}$:
  
 - $\theta_{i\cdot}$ — the $i$-th row of the $5\times5$ transition matrix; a simplex giving $P(\text{tier}_{t+1}=j \mid \text{tier}_t=i)$.
 - $\text{counts}_{ij}$ — observed historical count of season-over-season transitions $i \to j$ (2005–2026 standings).
