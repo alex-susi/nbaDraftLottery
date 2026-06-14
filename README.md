@@ -1,4 +1,4 @@
-# Probabilistic Pick Valuations Under the NBA's New 3-2-1 Draft Lottery
+# Probabilistic Draft Pick Valuations Under the NBA's New 3-2-1 Lottery Rules
 
 A fully Bayesian pipeline for valuing NBA draft picks under the league's new **3-2-1 lottery format** (approved by the NBA Board of Governors in May 2026, effective for the 2027–2029 drafts). Every pick is valued with full posterior uncertainty, picks are re-priced under both the old and new lottery systems, and a trade machine lets you compare any deal with correlated within-simulation draws.
 
@@ -7,12 +7,12 @@ To my knowledge this is the first public implementation of the official 37-ball,
 ## Overview
  
 - **Values every first and second round draft pick, 2026–2032**, under both the current and 3-2-1 lottery systems
-- **Propagates full posterior uncertainty** from model parameters through to credible intervals on every pick and every trade
-- **Models the new anti-tank rules** — relegation tier ball counts, the pick-12 floor, no consecutive #1s, no three-straight top-5 picks, and the 12–15 protection ban
-- **Runs a trade machine** that values multi-pick deals (with hypothetical protections/swaps) using correlated draws, so realized outcomes can disagree with expected value
+- **Propagates full posterior uncertainty** from model parameters through credible intervals on every pick and every trade, including pick conveyance and swap exercise probabilities.
+- **Models the new anti-tank rules** — relegation tier ball counts, the 12th pick floor, no consecutive #1 overall picks, no three straight top-5 picks, and the 12–15 protection ban.
+- **Runs a trade machine** that values multi-pick deals (with hypothetical protections/swaps) using correlated draws, so realized player outcomes can be compared to expected pick value.
 ## Methodology
  
-**Pick value = first-4-year Win Shares** (the rookie-scale cost-controlled window), scraped from Basketball-Reference draft classes 1985–2021.
+**Pick value = first 4-year Win Shares** (the rookie-scale cost-controlled window), scraped from Basketball-Reference draft classes 1985–2021.
  
 Three Stan models:
  
@@ -28,7 +28,7 @@ $$\text{played}_n \sim \text{Bernoulli}(\pi_{p[n]})$$
  
 $$\text{ws4}_n - \text{floor} \mid \text{played}_n = 1 \sim \begin{cases} \text{LogNormal}(m_p + \delta,\ \kappa s_p) & \text{prob } u_p \\ \text{LogNormal}(m_p,\ s_p) & \text{prob } 1 - u_p \end{cases}$$
  
-**Team strength** (`team_strength.stan`) — a first-order **Dirichlet-Multinomial Markov chain** over the five 3-2-1 tiers (relegation → playoff). Tiers are chosen to *be* the lottery's seeding mechanism, so transitions map directly onto how picks get seeded. Conjugacy gives a closed-form posterior $\text{Dirichlet}(\alpha + \text{counts})$ as a cross-check:
+**Team strength** (`team_strength.stan`) — a first-order **Dirichlet-Multinomial Markov chain** over the five 3-2-1 tiers (relegation → missed play-in → 9/10 seeds → 7/8 losers → playoff). Tiers are chosen to *be* the lottery's seeding mechanism, so transitions map directly onto how many ping pong balls each team is assigned in future seasons. Conjugacy gives a closed-form posterior $\text{Dirichlet}(\alpha + \text{counts})$ as a cross-check:
  
 $$\theta_{i\cdot} \sim \text{Dirichlet}(\alpha_{i\cdot}), \qquad \text{counts}_{i\cdot} \sim \text{Multinomial}(\theta_{i\cdot})$$
  
@@ -76,9 +76,9 @@ Run `05_model_validation.R` separately for the full validation suite (outputs to
  
 - No time discounting — a 2031 pick and a 2027 pick of equal EV are treated equally.
 - No surplus value yet (production is not netted against rookie-scale salary).
-- Team projections do not account for age, roster continuity, salary cap space, draft picks, etc.
+- Team projections in the Markov Chain do not account for age, roster continuity, salary cap space, draft picks, injuries, etc.
 - Deeply nested multi-team swap chains are encoded as close approximations.
-- Win Shares is hardly a perfect metric, and other more advanced all-in-one statistics may be explored in the future.
+- Win Shares is hardly a perfect metric, and other more advanced all-in-one statistics (EPM, RAPTOR, xRAPM, etc.) may be explored in the future.
 ## Acknowledgments
  
 Builds on the draft-value-curve lineage from Barzilai (82games), Pelton (ESPN WARP charts), and Goldstein (PIPM); the 3-2-1-specific re-pricing work of Nick Thoreson and Luke McCartney; and the option-pricing template of Foster & Binns, *Valuing Protections on NBA Draft Picks* (MIT Sloan, 2019).
