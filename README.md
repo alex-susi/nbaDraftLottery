@@ -14,17 +14,17 @@ To my knowledge this is the first public implementation of the official 37-ball,
  
 **Pick value = first-4-year Win Shares** (the rookie-scale cost-controlled window), scraped from Basketball-Reference draft classes 1985–2021.
  
-Three Stan models do the work.
+Three Stan models:
  
 ### Round 1 pick curve — `pick_value_v3.stan`
  
-A robust regression of first-four-year Win Shares on draft slot. The mean follows a power-law decay in pick number, and per-slot residual variance is smoothed across adjacent picks by a Gaussian random walk on the log scale — a principled replacement for the ad-hoc neighbor-averaging found in most public curves. The Student-t likelihood accommodates the heavy tails of draft outcomes (occasional superstars and total busts) without the mean curve being distorted by outliers.
+A robust regression of first-four-year Win Shares on draft slot. The mean follows a power-law decay in pick number, and per-slot residual variance is smoothed across adjacent picks by a Gaussian random walk on the log scale. The Student-t likelihood accommodates the heavy tails of draft outcomes (occasional superstars and total busts) without the mean curve being distorted by outliers.
  
 $$\text{ws4}_n \sim \text{Student-}t\big(\nu,\ \mu_{p[n]},\ \sigma_{p[n]}\big), \qquad \mu_p = \frac{\alpha}{p^{\beta}} + \gamma$$
  
 $$\log \sigma_p = \log \sigma_{p-1} + \tau\, z_p, \qquad z_p \sim \mathcal{N}(0,1)$$
  
-Priors (with parameter constraints):
+Priors:
  
 $$\log\alpha \sim \mathcal{N}(\log 20,\ 0.6), \qquad \alpha > 0$$
  
@@ -52,7 +52,7 @@ where, for player $n$ drafted at slot $p[n] \in \{1,\dots,30\}$:
 - $\nu$ — Student-t degrees of freedom; lower $\nu$ yields heavier tails, with the constraint $\nu>2$ keeping the variance finite. The $\text{Exponential}(0.20)$ prior centers $\nu \approx 7$ (moderately heavy tails) while permitting near-Gaussian or much heavier tails as the data dictate.
 ### Round 2 pick curve — `pick_play_r2_v6_declining_upside.stan`
  
-Second-round picks violate the first-round model because the modal career outcome is *literally zero* NBA value. The valuation is therefore a two-part **hurdle**: a Bernoulli gate for whether a player produces at all, and, conditional on producing, a shifted right-skewed lognormal mixture. A pick-declining mixture weight admits the rare second-round star (Jokić, Ginóbili) without inflating the typical-pick curve.
+Second-round picks violate the first-round model because the modal career outcome is *zero* NBA value. The valuation is therefore a two-part **hurdle**: a Bernoulli model for whether a player logs any NBA minutes at all, and, conditional on playing, a shifted right-skewed lognormal mixture. A pick-declining mixture weight allows for the rare second-round star without inflating the typical-pick curve.
  
 $$\text{played}_n \sim \text{Bernoulli}(\pi_{p[n]})$$
  
@@ -66,7 +66,7 @@ $$
  
 The play probability $\pi_p$, typical median $m_p$, and dispersion $s_p$ each follow their own adjacent-pick random walk (with drift), borrowing strength across neighboring second-round slots exactly as in the round-one variance model.
  
-Priors (with parameter constraints):
+Priors:
  
 $$\text{logit}\,\pi_p = \text{logit}\,\pi_{p-1} + d_\pi + \tau_\pi z^{\pi}_p, \qquad \pi_p \in (0,1)$$
  
@@ -106,7 +106,7 @@ A first-order Markov chain over the five 3-2-1 lottery tiers, chosen so the stat
  
 $$\theta_{i\cdot} \sim \text{Dirichlet}(\alpha_{i\cdot}), \qquad \text{counts}_{i\cdot} \sim \text{Multinomial}(\theta_{i\cdot})$$
  
-Priors (with parameter constraints):
+Priors:
  
 $$\theta_{i\cdot} \sim \text{Dirichlet}(\alpha_{i\cdot}), \qquad \theta_{i\cdot} \in \Delta^{K-1} \ \ (\textstyle\sum_j \theta_{ij} = 1)$$
  
