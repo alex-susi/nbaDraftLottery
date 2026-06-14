@@ -138,9 +138,13 @@ $$
 \qquad \alpha_{ij} > 0
 $$
  
-with the observed transition counts entering as data, $\mathrm{counts}_{ij} \in \mathbb{Z}_{\geq 0}$.
+with the observed transition counts entering as data:
 
-where, for tiers $i, j \in \lbrace \text{relegation},\ \text{non-play-in},\ \text{play-in seed},\ \text{play-in loser},\ \text{playoff} \rbrace$:
+$$\mathrm{counts}_{ij} \in \mathbb{Z}_{\geq 0}$$
+
+where, for tiers:
+
+$$i, j \in \lbrace \mathrm{relegation},\ \mathrm{non\text{-}play\text{-}in},\ \mathrm{play\text{-}in\ seed},\ \mathrm{play\text{-}in\ loser},\ \mathrm{playoff} \rbrace$$
  
 | Parameter | Description |
 |-----------|------|
