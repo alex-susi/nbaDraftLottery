@@ -40,15 +40,15 @@ $$z_p \sim \mathcal{N}(0,1), \qquad z_p \in \mathbb{R}$$
  
 $$\nu - 2 \sim \text{Exponential}(0.20), \qquad \nu > 2$$
  
-where, for player $n$ drafted at slot $p[n] \in \{1,\dots,30\}$:
+where, for player $n$ drafted at pick $p[n] \in \{1,\dots,30\}$:
  
-- $\mu_p$ — expected first-four-year Win Shares at slot $p$; the deterministic value curve.
+- $\mu_p$ — expected first-four-year Win Shares at pick $p$.
 - $\alpha$ — curve amplitude, governing the height of the top of the lottery.
 - $\beta$ — decay exponent controlling how steeply value falls with pick number.
 - $\gamma$ — asymptotic floor, the baseline value the curve approaches in the late first round.
 - $\sigma_p$ — slot-specific residual scale (outcome volatility around $\mu_p$), anchored at $\sigma_1$ and propagated by the random walk.
-- $\tau$ — random-walk innovation scale; small $\tau$ forces $\sigma_p$ to evolve smoothly across neighboring slots, large $\tau$ permits abrupt local volatility shifts.
-- $z_p$ — standardized (non-centered) random-walk innovations; how much pick $p$'s outcome risk moves from those of the adjacent picks.
+- $\tau$ — random-walk innovation scale; small $\tau$ forces $\sigma_p$ to gradually evolve across neighboring slots, large $\tau$ permits abrupt volatility shifts.
+- $z_p$ — how much pick $p$'s outcome risk moves from those of the adjacent picks.
 - $\nu$ — Student-t degrees of freedom; lower $\nu$ yields heavier tails, with the constraint $\nu>2$ keeping the variance finite. The $\text{Exponential}(0.20)$ prior centers $\nu \approx 7$ (moderately heavy tails) while permitting near-Gaussian or much heavier tails as the data dictate.
 ### Round 2 pick curve — `pick_play_r2_v6_declining_upside.stan`
  
@@ -95,12 +95,13 @@ where, for player $n$ at slot $p[n] \in \{31,\dots,60\}$:
 - $m_p$ — log-median of the *typical* played-player outcome at pick $p$.
 - $s_p$ — lognormal dispersion of the typical component; how spread out the rotation player outcomes are at pick $p$.
 - $u_p$ — rare-upside mixture weight, regularized to *decline* across the round so later picks are not credited with implausible star probability.
-- $\delta$ — additive log-location shift of the upside component (how much larger the rare outcome is in log-median terms); the gap between a rare star hit and a typical contributor.
-- $\kappa$ — multiplicative inflation of the upside component's dispersion, capped to prevent an explosive far-right tail; how much wider the boom-or-bust outcomes are than the typical outcomes.
-- $d_\pi$ — drift in play probability across slots, capturing the steady decline in the odds a pick sticks in the league as pick number rises.
-- $d_m$ — drift in typical-outcome median across slots, capturing how the value of a contributing pick erodes deeper into the round.
+- $\delta$ — additive log-location shift of the upside component; the gap between a rare star hit and a typical contributor.
+- $\kappa$ — multiplicative inflation of the upside component's dispersion, capped to prevent an explosive far-right tail; how much rarer the boom-or-bust outcomes are than the typical outcomes.
+- $d_\pi$ — drift in play probability across slots, capturing the steady decline in odds that a later pick records at least 1 NBA minute.
+- $d_m$ — drift in typical-outcome median across slots, capturing how the value of a contributing pick decreases deeper into the round.
 - $\tau_\pi\, \tau_m\, \tau_s$ — random-walk innovation scales for the play, median, and dispersion curves; how smoothly each evolves from one slot to the next.
-- $z^{\pi}_p\, z^{m}_p\, z^{s}_p$ — standardized innovations; the slot-specific departures of each curve from its neighbor.
+- $z^{\pi}_p\, z^{m}_p\, z^{s}_p$ — the slot-specific departures of each curve from its neighbor.
+
 Expected asset value is generated directly as $\text{EV}_p = \pi_p \cdot \mathbb{E}[\text{ws4} \mid \text{play},\ p]$.
  
 ### Team strength — `team_strength.stan`
