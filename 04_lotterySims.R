@@ -192,23 +192,72 @@ rank_teams_by_slot <- function(slots, teams) {
   teams[order(as.numeric(slots[teams]), na.last = TRUE)]
 }
 
-apply_simple_future_obligations <- function(owner_by_orig, slots, yr) {
+normalize_obligation_state <- function(state = NULL) {
+  defaults <- list(
+    mia_2027_frp_conveyed_to_cha = FALSE,
+    den_first_potential_conveyed_to_okc_by_2028 = FALSE,
+    den_first_potential_conveyed_to_okc_by_2029 = FALSE,
+    den_2028_2030_obligation_settled = FALSE
+  )
+
+  if (is.null(state)) return(defaults)
+  modifyList(defaults, state)
+}
+
+update_obligation_state <- function(state, owner_by_orig, yr) {
+  state <- normalize_obligation_state(state)
+
+  if (yr == 2027L) {
+    state$mia_2027_frp_conveyed_to_cha <-
+      identical(unname(owner_by_orig["MIA"]), "CHA")
+  }
+
+  # This tracks DEN first-potential conveyance to OKC through the simulated
+  # first-round allocator. It is used by DEN's later RealGM conditional seconds
+  # and by the 2030 first-round condition.
+  if (yr <= 2028L && identical(unname(owner_by_orig["DEN"]), "OKC")) {
+    state$den_first_potential_conveyed_to_okc_by_2028 <- TRUE
+  }
+  if (yr <= 2029L && identical(unname(owner_by_orig["DEN"]), "OKC")) {
+    state$den_first_potential_conveyed_to_okc_by_2029 <- TRUE
+  }
+
+  # Treat the direct DEN 2028-2030 top-5-protected chain as settled only when
+  # the DEN original pick itself conveys to OKC in one of those future years.
+  if (yr %in% 2028:2030 && identical(unname(owner_by_orig["DEN"]), "OKC")) {
+    state$den_2028_2030_obligation_settled <- TRUE
+  }
+
+  state
+}
+
+apply_simple_future_obligations <- function(owner_by_orig, slots, yr, state = NULL) {
+  state <- normalize_obligation_state(state)
   rows <- traded_future %>% filter(year == yr, round == 1L)
-  
+
   # Outright protected/unprotected transfers. If protection does not convey,
-  # owner_by_orig stays as the original team, so the own/retained asset receives value.
+  # owner_by_orig stays as the original team, so the retained own asset receives value.
   outrights <- rows %>% filter(pick_type == "outright")
   if (nrow(outrights) > 0) {
     for (j in seq_len(nrow(outrights))) {
       og <- outrights$original_team[j]
       ow <- outrights$owner[j]
       prot <- outrights$protection[j]
+
+      # DEN top-5-protected chain:
+      # 2028/2029: only if not already settled.
+      # 2030: only if not already settled AND the RealGM by-2028 condition is true.
+      if (identical(og, "DEN") && identical(ow, "OKC") && yr %in% 2028:2030) {
+        if (isTRUE(state$den_2028_2030_obligation_settled)) next
+        if (yr == 2030L && !isTRUE(state$den_first_potential_conveyed_to_okc_by_2028)) next
+      }
+
       if (!is.na(slots[og]) && pick_conveys(slots[og], prot)) {
         owner_by_orig[og] <- ow
       }
     }
   }
-  
+
   # Simple two-team swaps. The holder receives the more favorable original pick;
   # the counterparty receives the less favorable original pick through the
   # automatically generated swap_return asset.
@@ -227,11 +276,13 @@ apply_simple_future_obligations <- function(owner_by_orig, slots, yr) {
       }
     }
   }
-  
+
   owner_by_orig
 }
 
-apply_complex_future_obligations <- function(owner_by_orig, slots, yr) {
+apply_complex_future_obligations <- function(owner_by_orig, slots, yr, state = NULL) {
+  state <- normalize_obligation_state(state)
+
   # 2027 ----------------------------------------------------------------------
   if (yr == 2027L) {
     # MIL/NOP: best to NOP; other to ATL if 5-30; if both top-4, both to NOP.
@@ -240,7 +291,7 @@ apply_complex_future_obligations <- function(owner_by_orig, slots, yr) {
       owner_by_orig[r[1]] <- "NOP"
       owner_by_orig[r[2]] <- if (!is.na(slots[r[2]]) && slots[r[2]] <= 4) "NOP" else "ATL"
     }
-    
+
     # CLE/MIN/UTA: best MEM, second UTA, least PHX.
     r <- rank_teams_by_slot(slots, c("CLE", "MIN", "UTA"))
     if (length(r) == 3) {
@@ -248,12 +299,12 @@ apply_complex_future_obligations <- function(owner_by_orig, slots, yr) {
       owner_by_orig[r[2]] <- "UTA"
       owner_by_orig[r[3]] <- "PHX"
     }
-    
-    # SAN: 1-16 SAC, 17-30 OKC.
+
+    # SAS: 1-16 SAC, 17-30 OKC.
     if (!is.na(slots["SAS"])) {
       owner_by_orig["SAS"] <- if (slots["SAS"] <= 16) "SAC" else "OKC"
     }
-    
+
     # OKC/DEN/LAC: DEN participates only if 6-30. If DEN is top-5 it stays DEN.
     pool <- c("OKC", "LAC")
     if (!is.na(slots["DEN"]) && slots["DEN"] > 5) {
@@ -270,9 +321,15 @@ apply_complex_future_obligations <- function(owner_by_orig, slots, yr) {
       owner_by_orig[r[3]] <- "LAC"
     }
   }
-  
+
   # 2028 ----------------------------------------------------------------------
   if (yr == 2028L) {
+    # MIA rollover: MIA 2028 first to CHA if the 2027 MIA 15-30 obligation
+    # did not convey.
+    if (!isTRUE(state$mia_2027_frp_conveyed_to_cha) && !is.na(slots["MIA"])) {
+      owner_by_orig["MIA"] <- "CHA"
+    }
+
     # ATL/CLE/UTA: more favorable CLE/UTA to UTA; more favorable of ATL and
     # less favorable CLE/UTA to ATL; least of those two to CLE.
     cu <- rank_teams_by_slot(slots, c("CLE", "UTA"))
@@ -284,7 +341,7 @@ apply_complex_future_obligations <- function(owner_by_orig, slots, yr) {
         owner_by_orig[atl_pair[2]] <- "CLE"
       }
     }
-    
+
     # SAS/BOS: BOS #1 protected from swap; otherwise SAS can take BOS if better.
     if (!is.na(slots["BOS"]) && !is.na(slots["SAS"]) && slots["BOS"] > 1) {
       if (slots["BOS"] < slots["SAS"]) {
@@ -292,13 +349,8 @@ apply_complex_future_obligations <- function(owner_by_orig, slots, yr) {
         owner_by_orig["SAS"] <- "BOS"
       }
     }
-    
-    # BKN/PHI/PHX/NYK/WAS/MIL/POR nested pool. RealGM's text is deeply nested;
-    # this is an explicit approximation: PHI keeps 1-8; among eligible BKN/PHX/
-    # NYK/PHI picks, BKN gets the best two when available, NYK the next, PHX the
-    # remainder; WAS can then improve by taking the better of WAS and PHX's
-    # currently allocated pick; MIL can then improve by taking the better of MIL
-    # and WAS's post-swap pick. POR is included only as MIL/WAS swap context.
+
+    # BKN/PHI/PHX/NYK/WAS/MIL/POR nested pool approximation.
     pool <- c("BKN", "PHX", "NYK")
     if (!is.na(slots["PHI"]) && slots["PHI"] > 8) {
       pool <- c(pool, "PHI")
@@ -310,8 +362,7 @@ apply_complex_future_obligations <- function(owner_by_orig, slots, yr) {
     if (length(r) >= 2) owner_by_orig[r[2]] <- "BKN"
     if (length(r) >= 3) owner_by_orig[r[3]] <- "NYK"
     if (length(r) >= 4) owner_by_orig[r[4]] <- "PHX"
-    
-    # Approximate WAS/PHX and MIL/WAS swap layers using the PHX-assigned pick.
+
     phx_pick <- names(owner_by_orig)[owner_by_orig == "PHX" & names(owner_by_orig) %in% pool]
     if (length(phx_pick) > 0 && !is.na(slots["WAS"])) {
       target <- rank_teams_by_slot(slots, c("WAS", phx_pick[1]))
@@ -330,24 +381,21 @@ apply_complex_future_obligations <- function(owner_by_orig, slots, yr) {
       }
     }
   }
-  
+
   # 2029 ----------------------------------------------------------------------
   if (yr == 2029L) {
-    # DAL/HOU/PHX: two best to HOU, other to BKN.
     r <- rank_teams_by_slot(slots, c("DAL", "HOU", "PHX"))
     if (length(r) == 3) {
       owner_by_orig[r[1:2]] <- "HOU"
       owner_by_orig[r[3]] <- "BKN"
     }
-    
-    # BOS/MIL/POR: best and worst to POR; middle to WAS.
+
     r <- rank_teams_by_slot(slots, c("BOS", "MIL", "POR"))
     if (length(r) == 3) {
       owner_by_orig[r[c(1, 3)]] <- "POR"
       owner_by_orig[r[2]] <- "WAS"
     }
-    
-    # CLE/MIN/UTA with MIN top-5 protection.
+
     pool <- c("CLE", "UTA")
     if (!is.na(slots["MIN"]) && slots["MIN"] > 5) {
       pool <- c(pool, "MIN")
@@ -362,16 +410,14 @@ apply_complex_future_obligations <- function(owner_by_orig, slots, yr) {
       owner_by_orig[r[1:2]] <- "UTA"
       owner_by_orig[r[3]] <- "CHA"
     }
-    
-    # MEM/ORL: ORL keeps 1-2, otherwise MEM can swap for ORL if ORL is better.
+
     if (!is.na(slots["ORL"]) && slots["ORL"] > 2 && !is.na(slots["MEM"])) {
       if (slots["ORL"] < slots["MEM"]) {
         owner_by_orig["ORL"] <- "MEM"
         owner_by_orig["MEM"] <- "ORL"
       }
     }
-    
-    # PHI/LAC: LAC keeps 1-3, otherwise PHI can swap for LAC if LAC is better.
+
     if (!is.na(slots["LAC"]) && slots["LAC"] > 3 && !is.na(slots["PHI"])) {
       if (slots["LAC"] < slots["PHI"]) {
         owner_by_orig["LAC"] <- "PHI"
@@ -379,11 +425,9 @@ apply_complex_future_obligations <- function(owner_by_orig, slots, yr) {
       }
     }
   }
-  
+
   # 2030 ----------------------------------------------------------------------
   if (yr == 2030L) {
-    # WAS/PHX/MEM: better WAS/PHX to WAS; better of MEM and worse WAS/PHX to
-    # MEM; remaining to PHX.
     wp <- rank_teams_by_slot(slots, c("WAS", "PHX"))
     if (length(wp) == 2) {
       owner_by_orig[wp[1]] <- "WAS"
@@ -393,10 +437,11 @@ apply_complex_future_obligations <- function(owner_by_orig, slots, yr) {
         owner_by_orig[rem[2]] <- "PHX"
       }
     }
-    
-    # SAS/DAL/MIN. MIN keeps #1. Otherwise, best of DAL/SAS/MIN to SAS, second
-    # to MIN, remaining to DAL. This mirrors the rank language closely enough
-    # for valuation without adding another nested state machine.
+
+    # Exact RealGM DAL/SAS/MIN logic:
+    # SAS gets most favorable of SAS, DAL, and MIN 2-30.
+    # DAL gets less favorable of SAS and DAL.
+    # MIN keeps #1; otherwise MIN gets less favorable of MIN and more favorable SAS/DAL.
     if (!is.na(slots["MIN"]) && slots["MIN"] == 1) {
       sd <- rank_teams_by_slot(slots, c("SAS", "DAL"))
       if (length(sd) == 2) {
@@ -405,38 +450,72 @@ apply_complex_future_obligations <- function(owner_by_orig, slots, yr) {
       }
       owner_by_orig["MIN"] <- "MIN"
     } else {
-      r <- rank_teams_by_slot(slots, c("SAS", "DAL", "MIN"))
-      if (length(r) == 3) {
-        owner_by_orig[r[1]] <- "SAS"
-        owner_by_orig[r[2]] <- "MIN"
-        owner_by_orig[r[3]] <- "DAL"
+      sd <- rank_teams_by_slot(slots, c("SAS", "DAL"))
+      all3 <- rank_teams_by_slot(slots, c("SAS", "DAL", "MIN"))
+      if (length(sd) == 2 && length(all3) == 3) {
+        best_sd  <- sd[1]
+        worst_sd <- sd[2]
+        best_all <- all3[1]
+
+        owner_by_orig[best_all] <- "SAS"
+        owner_by_orig[worst_sd] <- "DAL"
+
+        min_pick <- if (identical(best_all, "MIN")) best_sd else "MIN"
+        owner_by_orig[min_pick] <- "MIN"
       }
     }
-    
-    # POR/MIL: POR may take MIL if MIL is better, with MIL receiving POR.
+
     if (!is.na(slots["MIL"]) && !is.na(slots["POR"]) && slots["MIL"] < slots["POR"]) {
       owner_by_orig["MIL"] <- "POR"
       owner_by_orig["POR"] <- "MIL"
     }
   }
-  
+
   owner_by_orig
 }
 
-resolve_pick_owners <- function(slots, yr) {
+resolve_pick_owners <- function(slots, yr, state = NULL) {
+  state <- normalize_obligation_state(state)
   owner_by_orig <- setNames(all_teams, all_teams)
-  owner_by_orig <- apply_simple_future_obligations(owner_by_orig, slots, yr)
-  owner_by_orig <- apply_complex_future_obligations(owner_by_orig, slots, yr)
-  owner_by_orig
+  owner_by_orig <- apply_simple_future_obligations(owner_by_orig, slots, yr, state)
+  owner_by_orig <- apply_complex_future_obligations(owner_by_orig, slots, yr, state)
+  state <- update_obligation_state(state, owner_by_orig, yr)
+  list(owner_by_orig = owner_by_orig, state = state)
 }
 
-first_round_condition_met <- function(condition_id, first_owner_by_orig) {
+first_round_condition_met <- function(condition_id,
+                                      first_owner_by_orig,
+                                      first_slots = NULL,
+                                      obligation_state = NULL) {
   if (is.na(condition_id) || is.null(condition_id)) return(TRUE)
+  obligation_state <- normalize_obligation_state(obligation_state)
+
   switch(condition_id,
          LAL_2027_FRP_TO_MEM     = identical(unname(first_owner_by_orig["LAL"]), "MEM"),
          LAL_2027_FRP_NOT_TO_MEM = !identical(unname(first_owner_by_orig["LAL"]), "MEM"),
          DAL_2027_FRP_TO_CHA     = identical(unname(first_owner_by_orig["DAL"]), "CHA"),
          DAL_2027_FRP_NOT_TO_CHA = !identical(unname(first_owner_by_orig["DAL"]), "CHA"),
+
+         SAS_2027_FRP_TO_SAC     = identical(unname(first_owner_by_orig["SAS"]), "SAC"),
+         SAS_2027_FRP_TO_OKC     = identical(unname(first_owner_by_orig["SAS"]), "OKC"),
+
+         PHI_2028_FRP_RETAINED   = identical(unname(first_owner_by_orig["PHI"]), "PHI"),
+         BOS_2028_FRP_SLOT_1     = !is.null(first_slots) &&
+           !is.na(first_slots["BOS"]) && as.integer(first_slots["BOS"]) == 1L,
+
+         DEN_FRP_CONVEYED_TO_OKC_BY_2029 =
+           isTRUE(obligation_state$den_first_potential_conveyed_to_okc_by_2029),
+
+         DEN_FRP_NOT_CONVEYED_TO_OKC_BY_2029 =
+           !isTRUE(obligation_state$den_first_potential_conveyed_to_okc_by_2029),
+
+         ORL_2029_FRP_RETAINED =
+           !is.null(first_slots) &&
+           !is.na(first_slots["ORL"]) && as.integer(first_slots["ORL"]) <= 2L,
+
+         GSW_2030_FRP_NOT_TO_DAL =
+           !identical(unname(first_owner_by_orig["GSW"]), "DAL"),
+
          TRUE)
 }
 
@@ -451,27 +530,32 @@ assign_ranked_second_pool <- function(owner_by_orig, slots, teams, owners_by_ran
   owner_by_orig
 }
 
-apply_simple_second_obligations <- function(owner_by_orig, slots, yr, first_owner_by_orig) {
+apply_simple_second_obligations <- function(owner_by_orig,
+                                            slots,
+                                            yr,
+                                            first_owner_by_orig,
+                                            first_slots = NULL,
+                                            obligation_state = NULL) {
   rows <- traded_second %>% filter(year == yr)
   if (nrow(rows) == 0) return(owner_by_orig)
-  
+
   for (j in seq_len(nrow(rows))) {
     og <- rows$original_team[j]
     ow <- rows$owner[j]
     prot <- rows$protection[j]
     cond <- rows$condition_id[j]
     if (is.na(slots[og])) next
-    if (!first_round_condition_met(cond, first_owner_by_orig)) next
+    if (!first_round_condition_met(cond, first_owner_by_orig, first_slots, obligation_state)) next
     if (pick_conveys(slots[og], prot)) owner_by_orig[og] <- ow
   }
-  
+
   owner_by_orig
 }
 
 apply_complex_second_obligations <- function(owner_by_orig, slots, yr) {
   if (yr == 2027L) {
     owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("DAL", "BKN"), c("WAS", "DET"))
-    
+
     r4 <- rank_teams_by_slot(slots, c("HOU", "OKC", "IND", "MIA"))
     if (length(r4) == 4) {
       owner_by_orig[r4[1]] <- "PHI"
@@ -483,44 +567,95 @@ apply_complex_second_obligations <- function(owner_by_orig, slots, yr) {
         owner_by_orig[san_pair[2]] <- "MIA"
       }
     }
-    
+
     r <- rank_teams_by_slot(slots, c("NOP", "POR"))
     if (length(r) == 2) {
       owner_by_orig[r[1]] <- "CHA"
       owner_by_orig[r[2]] <- if (!is.na(slots[r[2]]) && slots[r[2]] >= 56) "HOU" else "POR"
     }
-    
+
     owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("ORL", "BOS"), c("UTA", "CHA"))
     owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("PHX", "GSW"), c("PHI", "WAS"))
   }
-  
+
   if (yr == 2028L) {
     owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("CHA", "LAC"), c("CHA", "DET"))
     owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("LAL", "WAS"), c("ORL", "WAS"))
+    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("IND", "PHX"), c("IND", "NYK"))
   }
-  
+
+  if (yr == 2029L) {
+    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("ATL", "MIA"), c("CHA", "OKC"))
+    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("DET", "MIL", "NYK"), c("DET", "DET", "CHI"))
+    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("IND", "WAS"), c("IND", "POR"))
+  }
+
   if (yr == 2030L) {
     owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("LAC", "UTA"), c("CHA", "UTA"))
+    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("NOP", "ORL"), c("ORL", "NOP"))
+    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("PHX", "POR"), c("PHI", "WAS"))
   }
-  
+
   if (yr == 2031L) {
     owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("MIN", "GSW"), c("CHI", "DET"))
     owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("BOS", "CLE"), c("UTA", "BOS"))
+
+    # ATL/HOU protected swap: ATL may swap for HOU only if HOU is 31-55.
+    # HOU 56-60 is handled by the simple BOS convey56_60 row.
+    if (!is.na(slots["HOU"]) && slots["HOU"] <= 55 &&
+        !is.na(slots["ATL"]) && slots["HOU"] < slots["ATL"]) {
+      owner_by_orig["HOU"] <- "ATL"
+      owner_by_orig["ATL"] <- "HOU"
+    }
+
+    # IND/MIA/MEM pool:
+    # more favorable IND/MIA to WAS;
+    # more favorable of MEM and less favorable IND/MIA to MEM;
+    # remaining least favorable to IND.
+    im <- rank_teams_by_slot(slots, c("IND", "MIA"))
+    if (length(im) == 2) {
+      owner_by_orig[im[1]] <- "WAS"
+      mem_pair <- rank_teams_by_slot(slots, c("MEM", im[2]))
+      if (length(mem_pair) == 2) {
+        owner_by_orig[mem_pair[1]] <- "MEM"
+        owner_by_orig[mem_pair[2]] <- "IND"
+      }
+    }
+
+    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("NOP", "ORL"), c("ORL", "OKC"))
   }
-  
+
   if (yr == 2032L) {
     owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("HOU", "PHX"), c("CHI", "PHX"))
+
+    # MEM/PHI swap: MEM may swap for PHI if PHI's second is better.
+    if (!is.na(slots["MEM"]) && !is.na(slots["PHI"]) && slots["PHI"] < slots["MEM"]) {
+      owner_by_orig["PHI"] <- "MEM"
+      owner_by_orig["MEM"] <- "PHI"
+    }
   }
-  
+
   owner_by_orig
 }
 
-resolve_second_pick_owners <- function(slots, yr, first_owner_by_orig) {
+resolve_second_pick_owners <- function(slots,
+                                       yr,
+                                       first_owner_by_orig,
+                                       first_slots = NULL,
+                                       obligation_state = NULL) {
   owner_by_orig <- setNames(all_teams, all_teams)
-  owner_by_orig <- apply_simple_second_obligations(owner_by_orig, slots, yr, first_owner_by_orig)
+  owner_by_orig <- apply_simple_second_obligations(
+    owner_by_orig,
+    slots,
+    yr,
+    first_owner_by_orig,
+    first_slots,
+    obligation_state
+  )
   owner_by_orig <- apply_complex_second_obligations(owner_by_orig, slots, yr)
   owner_by_orig
 }
+
 
 value_allocated_future_assets <- function(sim, yr, draft_round, slots, owner_by_orig, d_pick, d_pick2,
                                           team_value, team_n, team_best,
@@ -647,7 +782,7 @@ team_slot2_new <- array(NA_real_, dim = c(N_SIMS, 30, n_proj_years),
                         dimnames = list(NULL, all_teams, as.character(proj_years)))
 sim_curve_par_cols <- c(
   "alpha", "beta", "gamma", "tau_log_sigma_rw", "nu",
-  "logit_play_31_r2", "tau_logit_play_rw_r2",
+  "eta_31_r2", "tau_pi_r2",
   paste0("mu_", 1:60),
   paste0("sigma_", 1:60),
   paste0("p_play_", 31:60),
@@ -678,8 +813,8 @@ for (sim in 1:N_SIMS) {
     pick_draws$gamma[d_pick],
     pick_draws$tau_log_sigma_rw[d_pick],
     pick_draws$nu[d_pick],
-    pick2_draws$logit_play_31[d_pick2],
-    pick2_draws$tau_logit_play_rw[d_pick2],
+    pick2_draws$eta_31[d_pick2],
+    pick2_draws$tau_pi[d_pick2],
     as.numeric(pick_mu_draws[d_pick, ]),
     as.numeric(pick2_mu_draws[d_pick2, ]),
     as.numeric(pick_sd_draws[d_pick, ]),
@@ -729,6 +864,8 @@ for (sim in 1:N_SIMS) {
   top_hist[["DAL"]]$top5 <- c(top_hist[["DAL"]]$top5, 2025)
   
   team_tiers <- current_tiers0
+  obligation_state_c <- normalize_obligation_state()
+  obligation_state_n <- normalize_obligation_state()
   
   for (yr in FIRST_PROJECTED_DRAFT:LAST_PROJECTED_DRAFT) {
     # evolve tiers one year via the Markov chain
@@ -781,10 +918,21 @@ for (sim in 1:N_SIMS) {
     }
     
     # ---- resolve all simple + complex ownership obligations -----------------
-    owner_by_orig_c <- resolve_pick_owners(slot_c, yr)
-    owner_by_orig_n <- resolve_pick_owners(slot_n, yr)
-    owner2_by_orig_c <- resolve_second_pick_owners(slot2_c, yr, owner_by_orig_c)
-    owner2_by_orig_n <- resolve_second_pick_owners(slot2_n, yr, owner_by_orig_n)
+    resolved_c <- resolve_pick_owners(slot_c, yr, obligation_state_c)
+    owner_by_orig_c <- resolved_c$owner_by_orig
+    obligation_state_c <- resolved_c$state
+
+    resolved_n <- resolve_pick_owners(slot_n, yr, obligation_state_n)
+    owner_by_orig_n <- resolved_n$owner_by_orig
+    obligation_state_n <- resolved_n$state
+
+    owner2_by_orig_c <- resolve_second_pick_owners(
+      slot2_c, yr, owner_by_orig_c, slot_c, obligation_state_c
+    )
+
+    owner2_by_orig_n <- resolve_second_pick_owners(
+      slot2_n, yr, owner_by_orig_n, slot_n, obligation_state_n
+    )
     
     # ---- value every possible future pick asset -----------------------------
     # Each original team's pick can be allocated to exactly one owner under each
@@ -1419,8 +1567,8 @@ stan_diagnostics <- list(
     curve_type  = "Bayesian Student-t player-level Stan with adjacent-pick sigma smoothing"
   ),
   pick2_model = list(
-    logit_play_31    = round(mean(pick2_draws$logit_play_31), 3),
-    tau_logit_play_rw = round(mean(pick2_draws$tau_logit_play_rw), 4),
+    eta_31           = round(mean(pick2_draws$eta_31), 3),
+    tau_pi          = round(mean(pick2_draws$tau_pi), 4),
     p_play_31        = round(mean(pick2_p_play_draws[, 1]), 3),
     p_play_45        = round(mean(pick2_p_play_draws[, 15]), 3),
     p_play_60        = round(mean(pick2_p_play_draws[, 30]), 3),
@@ -1440,9 +1588,9 @@ stan_diagnostics <- list(
     upside_prob_31   = round(mean(pick2_upside_prob_draws[, 1]), 3),
     upside_prob_45   = round(mean(pick2_upside_prob_draws[, 15]), 3),
     upside_prob_60   = round(mean(pick2_upside_prob_draws[, 30]), 3),
-    upside_logit_slope = round(mean(pick2_draws$delta_logit_upside), 4),
-    upside_multiplier = round(mean(exp(pick2_draws$upside_log_shift)), 2),
-    upside_sigma_mult = round(mean(pick2_draws$upside_sigma_mult), 2),
+    d_u              = round(mean(pick2_draws$d_u), 4),
+    upside_multiplier = round(mean(exp(pick2_draws$delta)), 2),
+    kappa            = round(mean(pick2_draws$kappa), 2),
     loo_summary      = tibble(
       model = "round2_right_skew_hurdle_ws",
       elpd_loo = loo_pick_r2$estimates["elpd_loo", "Estimate"],
@@ -1551,5 +1699,4 @@ for (i in seq_len(nrow(summary_df))) {
               r$team, r$tier, r$wins, r$losses,
               r$current_mean, r$new_mean, r$delta_value, r$delta_pct))
 }
-
 

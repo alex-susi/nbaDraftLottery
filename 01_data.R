@@ -17,17 +17,13 @@
 #      the post-lottery 2026 order.
 #
 # Pipeline:
-#   1. Scrape standings (hoopR -> bbref fallback), rosters, draft production
+#   1. Scrape standings (bbref), rosters, draft production
 #   2. Build 5-tier Markov transition counts from history
 #   3. Fit Stan models (pick value + Markov) and validate them
 #   4. Monte Carlo: project tiers forward, run BOTH lotteries, value every
 #      owned pick under each system, applying protections / swaps / new rules
 #   5. Export dashboard_data.rds for the Shiny app
 #
-# Prereqs:
-#   install.packages(c("tidyverse","hoopR","rvest","httr","cmdstanr",
-#                      "janitor","posterior","expm","loo"))
-#   cmdstanr::install_cmdstan()
 ## ═════════════════════════════════════════════════════════════════════════════
 
 library(tidyverse)
@@ -61,7 +57,7 @@ FIRST_PROJECTED_DRAFT  <- 2027    # first year teams' finishes are projected
 LAST_PROJECTED_DRAFT   <- 2032    # 7-year horizon (2026 actual + 2027-2032)
 HISTORY_START          <- 2005    # first season for transition counts
 HISTORY_END            <- 2026    # last completed season
-USE_BAYESIAN_PICK_CURVE <- TRUE   # TRUE = Stan curve; FALSE = bootstrap curve
+draft_years            <- 1985:2021  # Stop at 2021 so every player has 4 years
 
 # The five 3-2-1 tiers, worst -> best, with lottery balls per team
 TIERS <- c("relegation", "nonplayin", "playin_seed", "playin_loser", "playoff")
@@ -143,23 +139,25 @@ scrape_standings_bbref <- function(season_end_year, delay = 3, verbose = FALSE) 
   fetch_bbref_page <- function(url) {
     Sys.sleep(delay + runif(1, 0, 1.5))
     
-    resp <- tryCatch(httr::RETRY(verb = "GET",
-                                 url = url,
-                                 times = 3,
-                                 pause_min = 2,
-                                 pause_cap = 8,
-                                 httr::user_agent(
-                                   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36"),
-                                 httr::add_headers(
-                                   `Accept` = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                                   `Accept-Language` = "en-US,en;q=0.9",
-                                   `Referer` = "https://www.basketball-reference.com/"),
-                                 httr::timeout(30)),
-                     error = function(e) {
-                       if (verbose) message("    request failed: ", e$message)
-                       NULL
-                     }
-    )
+    resp <- tryCatch(
+      httr::RETRY(
+        verb = "GET",
+        url = url,
+        times = 3,
+        pause_min = 2,
+        pause_cap = 8,
+        httr::user_agent(paste0("Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                                " AppleWebKit/537.36 Chrome/125 Safari/537.36")),
+        httr::add_headers(
+          `Accept` = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          `Accept-Language` = "en-US,en;q=0.9",
+          `Referer` = "https://www.basketball-reference.com/"),
+        httr::timeout(30)),
+      error = function(e) {
+        if (verbose) message("    request failed: ", e$message)
+        NULL
+        }
+      )
     
     if (is.null(resp)) return(NULL)
     
@@ -230,8 +228,12 @@ scrape_standings_bbref <- function(season_end_year, delay = 3, verbose = FALSE) 
     
     if (is.na(team_col)) team_col <- nm[1]
     
-    conf_val <- dplyr::case_when(str_detect(team_col, regex("eastern", ignore_case = TRUE)) ~ "East",
-                                 str_detect(team_col, regex("western", ignore_case = TRUE)) ~ "West",
+    conf_val <- dplyr::case_when(str_detect(team_col, 
+                                            regex("eastern", 
+                                                  ignore_case = TRUE)) ~ "East",
+                                 str_detect(team_col, 
+                                            regex("western", 
+                                                  ignore_case = TRUE)) ~ "West",
                                  TRUE ~ NA_character_)
     
     out <- tbl %>%
@@ -354,32 +356,10 @@ all_teams <- current_standings$abbr
 ## ═════════════════════════════════════════════════════════════════════════════
 ## 03 - DRAFT PRODUCTION CURVE -------------------------------------------------
 ## ═════════════════════════════════════════════════════════════════════════════
-# Pick value = SUM of Win Shares over a player's FIRST 4 SEASONS, matching the
-# rookie-scale contract window. The value comes from Basketball-Reference's
-# season-level "Advanced" export (Advanced.csv); we collapse each player to
-# their first-4-year WS total. The draft SLOT -> player_id map is scraped from
-# bbref draft pages and joined to the CSV by player_id. If the CSV or the join
-# is unavailable we fall back to a compiled first-4-year-WS curve.
+# Pick value = SUM of Win Shares over a player's first 4 seasons,
+#   matching the rookie-scale contract window
 
-scrape_draft_class_hoopR <- function(draft_year) {
-  if (!hoopR_available) return(NULL)
-  tryCatch({
-    dh <- hoopR::nba_drafthistory(season = draft_year)
-    tbl <- dh[["DraftHistory"]]
-    tbl %>%
-      transmute(
-        draft_year = draft_year,
-        pick       = as.integer(.data$OVERALL_PICK),
-        player     = .data$PLAYER_NAME
-      ) %>%
-      filter(!is.na(pick), pick >= 1, pick <= N_DRAFT_SLOTS)
-  }, error = function(e) NULL)
-}
-
-# We only need the draft SLOT -> player_id map from bbref (the value itself now
-# comes from Advanced.csv / ws_first_4). We extract the bbref player_id from
-# each player's hyperlink (e.g. /players/j/jamesle01.html -> "jamesle01") so we
-# can join cleanly to the Advanced.csv player_id column by ID rather than name.
+# Scrapes historical draft slots from Basketball Reference
 scrape_draft_slots_bbref <- function(draft_year, delay = 3) {
   url <- sprintf("https://www.basketball-reference.com/draft/NBA_%d.html",
                  draft_year)
@@ -438,66 +418,44 @@ scrape_draft_slots_bbref <- function(draft_year, delay = 3) {
   base %>% left_join(ids, by = "player")
 }
 
-cat("\n--- Building Draft Production Curve (first-4-year Win Shares) ---\n")
 
-# We use drafts 1985-2021 so every player has had >= 4 seasons to accumulate.
-draft_years <- 1985:2021
 
-# STEP A: load season-level Advanced stats and compute first-4-year WIN SHARES
-# Advanced.csv is the Basketball-Reference "Advanced" export (one row per
-# player-season). We collapse each player to the SUM of Win Shares over their
-# first four NBA seasons (rookie-scale window). Multi-team seasons (2TM/3TM
-# aggregate rows) are de-duplicated so a split season is counted once.
-
-adv_path <- "01_data/Advanced.csv"
-
+### 03.01 Compute first-4-year Win Shares --------------------------------------
 first_4_ws <- NULL
-if (!is.na(adv_path)) {
-  cat(sprintf("  Loading Advanced stats from %s\n", adv_path))
-  advanced <- read.csv(adv_path, stringsAsFactors = FALSE) %>%
-    clean_names()
+advanced <- read.csv("01_data/Advanced.csv", stringsAsFactors = FALSE) %>%
+  clean_names()
+
+first_4_ws <- advanced %>%
+  filter(lg == "NBA") %>%
   
-  first_4_ws <- advanced %>%
-    filter(lg == "NBA") %>%
-    
-    # If a player-season has a multi-team aggregate row like 2TM/3TM,
-    # keep only that aggregate row and drop the individual team rows.
-    group_by(player_id, season) %>%
-    filter(
-      if (any(str_detect(team, "^\\d+TM$"))) {
-        str_detect(team, "^\\d+TM$")
-      } else {
-        TRUE
-      }
-    ) %>%
-    ungroup() %>%
-    
-    arrange(player_id, season) %>%
-    group_by(player_id) %>%
-    mutate(career_year = dense_rank(season)) %>%
-    filter(career_year <= 4) %>%
-    summarise(
-      player           = first(player),
-      first_season     = min(season, na.rm = TRUE),
-      seasons_observed = n_distinct(season),
-      ws_first_4       = sum(ws, na.rm = TRUE),
-      ows_first_4      = sum(ows, na.rm = TRUE),
-      dws_first_4      = sum(dws, na.rm = TRUE),
-      vorp_first_4     = sum(vorp, na.rm = TRUE),
-      bpm_first_4      = weighted.mean(bpm, mp, na.rm = TRUE),
-      ws48_first_4     = weighted.mean(ws_48, mp, na.rm = TRUE),
-      mp_first_4       = sum(mp, na.rm = TRUE),
-      g_first_4        = sum(g, na.rm = TRUE),
-      .groups          = "drop"
-    )
+  # If a player-season has a multi-team aggregate row like 2TM/3TM,
+  # keep only that aggregate row and drop the individual team rows.
+  group_by(player_id, season) %>%
+  filter(if (any(str_detect(team, "^\\d+TM$"))) {
+    str_detect(team, "^\\d+TM$")
+    } else {
+      TRUE
+    }) %>%
+  ungroup() %>%
   
-  cat(sprintf("  Computed first-4-year WS for %d players\n", nrow(first_4_ws)))
-} else {
-  cat("  Advanced.csv not found in 01_data/ — will fall back to compiled curve\n")
-}
+  arrange(player_id, season) %>%
+  group_by(player_id) %>%
+  mutate(career_year = dense_rank(season)) %>%
+  filter(career_year <= 4) %>%
+  summarise(player           = first(player),
+            first_season     = min(season, na.rm = TRUE),
+            seasons_observed = n_distinct(season),
+            ws_first_4       = sum(ws, na.rm = TRUE),
+            ows_first_4      = sum(ows, na.rm = TRUE),
+            dws_first_4      = sum(dws, na.rm = TRUE),
+            vorp_first_4     = sum(vorp, na.rm = TRUE),
+            bpm_first_4      = weighted.mean(bpm, mp, na.rm = TRUE),
+            ws48_first_4     = weighted.mean(ws_48, mp, na.rm = TRUE),
+            mp_first_4       = sum(mp, na.rm = TRUE),
+            g_first_4        = sum(g, na.rm = TRUE),
+            .groups          = "drop")
 
 
-# STEP B: map each drafted player (slot) to their player_id via bbref, cache it
 slot_cache <- "01_data/draft_slots_cache.rds"
 if (file.exists(slot_cache)) {
   cat("  Using cached draft-slot map\n")
@@ -510,11 +468,9 @@ if (file.exists(slot_cache)) {
 }
 
 
-# STEP C: join slot -> player_id -> ws_first_4 to get value-by-slot draws
-# Round 1 keeps the original player-level production sample. Round 2 starts
-# from the full drafted-player table and treats missing NBA production rows as
-# structural zeroes for the hurdle model.
-draft_4yr <- NULL
+
+### 03.02 Join Draft Slots with 4-year Win Share Totals ------------------------
+draft_4yr    <- NULL
 draft_4yr_r2 <- NULL
 
 if (!is.null(first_4_ws) && !is.null(draft_slots) && nrow(draft_slots) > 0) {
@@ -558,12 +514,13 @@ if (!is.null(first_4_ws) && !is.null(draft_slots) && nrow(draft_slots) > 0) {
   
   cat(sprintf("  Joined %d first-round drafted players to first-4-year WS\n",
               nrow(draft_4yr)))
-  cat(sprintf("  Built second-round hurdle sample: %d drafted players, %.1f%% played NBA minutes\n",
+  cat(sprintf("  Built second-round: %d drafted players, %.1f%% played NBA minutes\n",
               nrow(draft_4yr_r2), 100 * mean(draft_4yr_r2$played == 1)))
 }
 
 
-# STEP D: build the per-slot curve inputs (round 1) and bootstrap pool
+
+### 03.03 Build Per-slot Curve Inputs ------------------------------------------
 pick_slot_data <- draft_4yr %>%
   group_by(pick) %>%
   summarise(war_mean = mean(ws4),
@@ -576,8 +533,6 @@ pick_slot_data <- draft_4yr %>%
 # Keep the raw player-level draws for the bootstrap option.
 pick_boot_pool <- draft_4yr %>%
   select(pick, ws4)
-cat(sprintf("  Built first-round slot curve from %d drafted players (first-4-yr WS)\n",
-            nrow(draft_4yr)))
 
 
 
@@ -590,4 +545,5 @@ pick_slot_data_r2 <- draft_4yr_r2 %>%
             n_obs    = n(),
             .groups  = "drop") %>%
   arrange(pick)
+
 

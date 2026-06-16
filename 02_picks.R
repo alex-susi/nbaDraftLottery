@@ -148,6 +148,7 @@ traded_future <- tribble(
   
   # ---- 2027: flat / directly representable obligations ----
   "HOU", "BKN", 2027, "none",    "swap",     "HOU may swap with BKN",
+  "SAS", "ATL", 2027, "none",    "outright", "ATL to SAS",
   "BKN", "NYK", 2027, "none",    "outright", "NYK to BKN",
   "HOU", "PHX", 2027, "none",    "outright", "PHX to HOU via BKN",
   "MEM", "LAL", 2027, "top4",    "outright", "LAL 5-30 to MEM",
@@ -374,6 +375,292 @@ complex_second_assets <- bind_rows(
   make_complex_second_assets(2032, "HOU_PHX_CHI_PHX_2R", c("HOU", "PHX"), c("CHI", "PHX"),
                              "HOU/PHX second-round ranked pool")
 )
+
+
+
+
+
+## ═════════════════════════════════════════════════════════════════════════════
+## REALGM AUDIT PATCHES: remaining first/second-round obligation registry fixes
+## Paste after `complex_second_assets <- bind_rows(...)` and before
+## `swap_return_assets <- traded_future %>% ...`
+## ═════════════════════════════════════════════════════════════════════════════
+
+# ---- FIRST ROUND PATCHES -----------------------------------------------------
+# ATL 2027 first to SAS is assumed manually inserted already.
+# This adds the MIA 2028 rollover asset only; allocation is handled in
+# 04_lotterySims.R because it depends on whether MIA's 2027 1st conveyed.
+traded_future <- bind_rows(
+  traded_future,
+  tribble(
+    ~owner, ~original_team, ~year, ~protection, ~pick_type, ~notes, ~complex_group, ~round,
+    "CHA", "MIA", 2028, "none", "conditional",
+    "MIA 2028 1st to CHA if MIA 2027 1st does not convey to CHA",
+    NA_character_, 1L
+  )
+) %>%
+  distinct(owner, original_team, year, round, pick_type, complex_group, .keep_all = TRUE)
+
+
+# ---- SECOND ROUND: missing simple / conditional obligations ------------------
+traded_second <- bind_rows(
+  traded_second,
+  
+  tribble(
+    ~owner, ~original_team, ~year, ~protection, ~pick_type, ~notes, ~condition_id, ~round, ~complex_group,
+    
+    # 2027
+    "IND", "UTA", 2027, "none", "outright",
+    "UTA 2027 2nd to IND via CLE", NA_character_, 2L, NA_character_,
+    
+    "OKC", "CHA", 2027, "none", "conditional",
+    "CHA 2027 2nd to OKC if SAS 2027 1st goes 1-16 to SAC", "SAS_2027_FRP_TO_SAC", 2L, NA_character_,
+    
+    "SAC", "CHA", 2027, "none", "conditional",
+    "CHA 2027 2nd to SAC if SAS 2027 1st goes 17-30 to OKC", "SAS_2027_FRP_TO_OKC", 2L, NA_character_,
+    
+    # 2028
+    "BKN", "ATL", 2028, "none", "outright",
+    "ATL 2028 2nd to BKN via GSW", NA_character_, 2L, NA_character_,
+    
+    "SAS", "BOS", 2028, "convey31_45", "conditional",
+    "BOS 2028 2nd 31-45 to SAS if BOS 2028 1st is #1", "BOS_2028_FRP_SLOT_1", 2L, NA_character_,
+    
+    "NYK", "BOS", 2028, "convey46_60", "outright",
+    "BOS 2028 2nd 46-60 to NYK", NA_character_, 2L, NA_character_,
+    
+    "BKN", "PHI", 2028, "none", "conditional",
+    "PHI 2028 2nd to BKN if PHI retains its 2028 1st 1-8", "PHI_2028_FRP_RETAINED", 2L, NA_character_,
+    
+    "UTA", "CLE", 2028, "none", "outright",
+    "CLE 2028 2nd to UTA", NA_character_, 2L, NA_character_,
+    
+    "WAS", "DEN", 2028, "convey34_60", "outright",
+    "DEN 2028 2nd 34-60 to WAS", NA_character_, 2L, NA_character_,
+    
+    "PHI", "GSW", 2028, "none", "outright",
+    "GSW 2028 2nd to PHI", NA_character_, 2L, NA_character_,
+    
+    "PHI", "MIL", 2028, "none", "outright",
+    "MIL 2028 2nd to PHI", NA_character_, 2L, NA_character_,
+    
+    "SAS", "MIN", 2028, "none", "outright",
+    "MIN 2028 2nd to SAS", NA_character_, 2L, NA_character_,
+    
+    "SAS", "NOP", 2028, "none", "outright",
+    "NOP 2028 2nd to SAS", NA_character_, 2L, NA_character_,
+    
+    "PHI", "OKC", 2028, "none", "outright",
+    "OKC 2028 2nd to PHI", NA_character_, 2L, NA_character_,
+    
+    "CHA", "ORL", 2028, "none", "outright",
+    "ORL 2028 2nd to CHA", NA_character_, 2L, NA_character_,
+    
+    "OKC", "UTA", 2028, "none", "outright",
+    "UTA 2028 2nd to OKC", NA_character_, 2L, NA_character_,
+    
+    # 2029
+    "OKC", "BOS", 2029, "none", "outright",
+    "BOS 2029 2nd to OKC", NA_character_, 2L, NA_character_,
+    
+    "BKN", "DAL", 2029, "none", "outright",
+    "DAL 2029 2nd to BKN", NA_character_, 2L, NA_character_,
+    
+    "BKN", "GSW", 2029, "none", "outright",
+    "GSW 2029 2nd to BKN", NA_character_, 2L, NA_character_,
+    
+    "DAL", "HOU", 2029, "none", "outright",
+    "HOU 2029 2nd to DAL via OKC/WAS", NA_character_, 2L, NA_character_,
+    
+    "HOU", "SAC", 2029, "none", "outright",
+    "SAC 2029 2nd to HOU via WAS", NA_character_, 2L, NA_character_,
+    
+    "ATL", "CLE", 2029, "none", "outright",
+    "CLE 2029 2nd to ATL", NA_character_, 2L, NA_character_,
+    
+    "CHA", "DEN", 2029, "none", "conditional",
+    "DEN 2029 2nd to CHA if DEN has conveyed a first potential 1st to OKC by 2029",
+    "DEN_FRP_CONVEYED_TO_OKC_BY_2029", 2L, NA_character_,
+    
+    "OKC", "DEN", 2029, "none", "conditional",
+    "DEN 2029 2nd to OKC if DEN has not conveyed a first potential 1st to OKC by 2029",
+    "DEN_FRP_NOT_CONVEYED_TO_OKC_BY_2029", 2L, NA_character_,
+    
+    "MEM", "ORL", 2029, "none", "conditional",
+    "ORL 2029 2nd to MEM if ORL 2029 1st is retained 1-2",
+    "ORL_2029_FRP_RETAINED", 2L, NA_character_,
+    
+    # 2030
+    "ATL", "NYK", 2030, "none", "outright",
+    "NYK 2030 2nd to ATL via POR", NA_character_, 2L, NA_character_,
+    
+    "BKN", "BOS", 2030, "none", "outright",
+    "BOS 2030 2nd to BKN via HOU", NA_character_, 2L, NA_character_,
+    
+    "DAL", "PHI", 2030, "none", "outright",
+    "PHI 2030 2nd to DAL", NA_character_, 2L, NA_character_,
+    
+    "OKC", "HOU", 2030, "none", "outright",
+    "HOU 2030 2nd to OKC", NA_character_, 2L, NA_character_,
+    
+    "OKC", "MIA", 2030, "none", "outright",
+    "MIA 2030 2nd to OKC", NA_character_, 2L, NA_character_,
+    
+    "MIN", "MEM", 2030, "convey51_60", "outright",
+    "MEM 2030 2nd 51-60 to MIN", NA_character_, 2L, NA_character_,
+    
+    "ORL", "MIL", 2030, "none", "outright",
+    "MIL 2030 2nd to ORL", NA_character_, 2L, NA_character_,
+    
+    "SAS", "SAC", 2030, "none", "outright",
+    "SAC 2030 2nd to SAS via IND", NA_character_, 2L, NA_character_,
+    
+    "SAS", "CLE", 2030, "none", "outright",
+    "CLE 2030 2nd to SAS", NA_character_, 2L, NA_character_,
+    
+    "DAL", "GSW", 2030, "none", "conditional",
+    "GSW 2030 2nd to DAL if GSW 2030 1st does not convey to DAL",
+    "GSW_2030_FRP_NOT_TO_DAL", 2L, NA_character_,
+    
+    "PHI", "WAS", 2030, "none", "outright",
+    "WAS 2030 2nd to PHI", NA_character_, 2L, NA_character_,
+    
+    # 2031
+    "BOS", "HOU", 2031, "convey56_60", "outright",
+    "HOU 2031 2nd 56-60 to BOS", NA_character_, 2L, NA_character_,
+    
+    "DET", "DAL", 2031, "none", "outright",
+    "DAL 2031 2nd to DET via PHI", NA_character_, 2L, NA_character_,
+    
+    "CHI", "DEN", 2031, "none", "outright",
+    "DEN 2031 2nd to CHI via PHX/CHA", NA_character_, 2L, NA_character_,
+    
+    "CHI", "NYK", 2031, "none", "outright",
+    "NYK 2031 2nd to CHI via CHA", NA_character_, 2L, NA_character_,
+    
+    "SAS", "SAC", 2031, "none", "outright",
+    "SAC 2031 2nd to SAS", NA_character_, 2L, NA_character_,
+    
+    "NOP", "TOR", 2031, "none", "outright",
+    "TOR 2031 2nd to NOP", NA_character_, 2L, NA_character_,
+    
+    # 2032
+    "BKN", "TOR", 2032, "none", "outright",
+    "TOR 2032 2nd to BKN", NA_character_, 2L, NA_character_,
+    
+    "MEM", "GSW", 2032, "convey51_60", "outright",
+    "GSW 2032 2nd 51-60 to MEM", NA_character_, 2L, NA_character_,
+    
+    "WAS", "UTA", 2032, "none", "outright",
+    "UTA 2032 2nd to WAS", NA_character_, 2L, NA_character_
+  )
+) %>%
+  distinct(owner, original_team, year, round, pick_type, complex_group, condition_id, .keep_all = TRUE)
+
+
+# ---- SECOND ROUND: missing ranked / swap pools -------------------------------
+complex_second_groups <- bind_rows(
+  complex_second_groups,
+  tribble(
+    ~year, ~group_id, ~notes,
+    2028, "IND_PHX_NYK_2R",
+    "More favorable IND/PHX 2nd to IND; other to NYK",
+    
+    2029, "ATL_MIA_CHA_OKC_2R",
+    "More favorable ATL/MIA 2nd to CHA; other to OKC",
+    
+    2029, "DET_MIL_NYK_DET_CHI_2R",
+    "Two most favorable DET/MIL/NYK 2nds to DET; other to CHI",
+    
+    2029, "IND_WAS_POR_2R",
+    "More favorable IND/WAS 2nd to IND; other to POR",
+    
+    2030, "NOP_ORL_ORL_NOP_2R",
+    "ORL may swap for NOP 2nd; more favorable to ORL, other to NOP",
+    
+    2030, "PHX_POR_PHI_WAS_2R",
+    "More favorable PHX/POR 2nd to PHI; other to WAS",
+    
+    2031, "ATL_HOU_SWAP_2R",
+    "ATL may swap for HOU 31-55 2nd; HOU 56-60 to BOS",
+    
+    2031, "IND_MIA_MEM_WAS_MEM_IND_2R",
+    "More favorable IND/MIA to WAS; more favorable MEM vs less favorable IND/MIA to MEM; least to IND",
+    
+    2031, "NOP_ORL_ORL_OKC_2R",
+    "More favorable NOP/ORL 2nd to ORL; other to OKC",
+    
+    2032, "MEM_PHI_SWAP_2R",
+    "MEM may swap for PHI 2nd"
+  )
+) %>%
+  distinct(year, group_id, .keep_all = TRUE)
+
+complex_second_assets <- bind_rows(
+  complex_second_assets,
+  
+  make_complex_second_assets(
+    2028, "IND_PHX_NYK_2R",
+    c("IND", "PHX"), c("IND", "NYK"),
+    "IND/PHX second-round ranked pool"
+  ),
+  
+  make_complex_second_assets(
+    2029, "ATL_MIA_CHA_OKC_2R",
+    c("ATL", "MIA"), c("CHA", "OKC"),
+    "ATL/MIA second-round ranked pool"
+  ),
+  
+  make_complex_second_assets(
+    2029, "DET_MIL_NYK_DET_CHI_2R",
+    c("DET", "MIL", "NYK"), c("DET", "CHI"),
+    "DET/MIL/NYK second-round ranked pool"
+  ),
+  
+  make_complex_second_assets(
+    2029, "IND_WAS_POR_2R",
+    c("IND", "WAS"), c("IND", "POR"),
+    "IND/WAS second-round ranked pool"
+  ),
+  
+  make_complex_second_assets(
+    2030, "NOP_ORL_ORL_NOP_2R",
+    c("NOP", "ORL"), c("ORL", "NOP"),
+    "ORL/NOP second-round swap pool"
+  ),
+  
+  make_complex_second_assets(
+    2030, "PHX_POR_PHI_WAS_2R",
+    c("PHX", "POR"), c("PHI", "WAS"),
+    "PHX/POR second-round ranked pool"
+  ),
+  
+  make_complex_second_assets(
+    2031, "ATL_HOU_SWAP_2R",
+    c("ATL", "HOU"), c("ATL", "HOU"),
+    "ATL/HOU protected second-round swap pool"
+  ),
+  
+  make_complex_second_assets(
+    2031, "IND_MIA_MEM_WAS_MEM_IND_2R",
+    c("IND", "MIA", "MEM"), c("WAS", "MEM", "IND"),
+    "IND/MIA/MEM second-round ranked pool"
+  ),
+  
+  make_complex_second_assets(
+    2031, "NOP_ORL_ORL_OKC_2R",
+    c("NOP", "ORL"), c("ORL", "OKC"),
+    "NOP/ORL second-round ranked pool"
+  ),
+  
+  make_complex_second_assets(
+    2032, "MEM_PHI_SWAP_2R",
+    c("MEM", "PHI"), c("MEM", "PHI"),
+    "MEM/PHI second-round swap pool"
+  )
+) %>%
+  distinct(owner, original_team, year, round, complex_group, .keep_all = TRUE)
+
 
 # Add reciprocal contingent rows for simple two-team swaps, so the team losing
 # the better pick can receive the swap-holder's original pick in simulations.
@@ -922,5 +1209,6 @@ pick_display_assets <- pick_display_assets %>%
   select(-member_n_actual) %>%
   arrange(year, owner, label)
 
-cat(sprintf("User-facing pick entitlements: %d display rows from %d internal asset rows\n",
+cat(sprintf("User-facing picks: %d display rows from %d internal asset rows\n",
             nrow(pick_display_assets), nrow(pick_assets)))
+
