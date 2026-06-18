@@ -174,8 +174,8 @@ A Monte Carlo simulation then projects each team's tier forward, runs both lotte
 | `03_models.R` | Fit all three Stan models and run LOO comparison |
 | `04_lotterySims.R` | Monte Carlo lottery + valuation engine |
 | `05_model_validation.R` | Standalone SBC / LOO / PPC validation |
-| `pick_value_v3.stan` | Round 1 Student-t / RW-sigma curve |
-| `pick_play_r2_v6_declining_upside.stan` | Round 2 hurdle model |
+| `picks_Round1.stan` | Round 1 Student-t / RW-sigma curve |
+| `picks_Round2.stan` | Round 2 hurdle model |
 | `team_strength.stan` | Tier-transition Markov chain |
 | `app.R` | Shiny dashboard + trade machine |
 
