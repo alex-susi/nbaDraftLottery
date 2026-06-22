@@ -206,7 +206,7 @@ Run `05_model_validation.R` separately for the full validation suite (outputs to
  
 - No time discounting — a 2031 pick and a 2027 pick of equal EV are treated equally.
 - No surplus value yet (production is not netted against rookie-scale salary).
-- Team projections o not account for age, roster continuity, salary cap space, draft pick capital, injuries, market size, etc.
+- Team projections do not account for age, roster continuity, salary cap space, draft pick capital, injuries, market size, etc.
 - Team projections are constructed using historical seasons, which operated under the old Lottery rules; projecting team behavior and performance under the new 3-2-1 rules adds another layer of complexity and uncertainty.
 - Deeply nested multi-team swap chains are encoded as close approximations.
 - Win Shares is hardly a perfect metric, and other more advanced all-in-one statistics (EPM, RAPTOR, xRAPM, etc.) may be explored in the future.
