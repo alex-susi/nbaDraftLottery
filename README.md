@@ -64,7 +64,7 @@ where, for player $n$ drafted at pick $p[n] \in \{1,\dots,30\}$:
 
 ### Second Round Picks — `picks_Round2.stan`
  
-Second-round picks violate the first-round model because the modal career outcome is *zero* NBA value. The valuation is therefore a two-part **hurdle**: a Bernoulli model for whether a player logs any NBA minutes at all, and, conditional on playing, a shifted right-skewed lognormal mixture. A pick-declining mixture weight allows for the rare second-round star without inflating the typical-pick curve.
+Second-round picks violate the first-round model because the modal career outcome is *zero* NBA value - unlike first-round picks, second-round picks frequently signed non-guarenteed contracts, spend significant time in the G-league, or return to play overseas before ever appearing in an NBA game. The valuation is therefore a two-part **hurdle**: a Bernoulli model for whether a player logs any NBA minutes at all, and, conditional on playing, a shifted right-skewed lognormal mixture. A pick-declining mixture weight allows for the rare second-round star without inflating the typical-pick curve.
  
 $$\text{played}_n \sim \text{Bernoulli}(\pi_{p[n]})$$
  
