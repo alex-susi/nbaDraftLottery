@@ -1,10 +1,8 @@
 # Probabilistic NBA Draft Pick Valuations Under the New 3-2-1 Lottery
 
-A fully Bayesian pipeline for valuing NBA draft picks under the league's new **3-2-1 lottery format** (approved by the NBA Board of Governors in May 2026, effective for the 2027–2029 drafts). Every pick is valued with full posterior uncertainty, picks are re-priced under both the old and new lottery systems, and a trade machine lets you evaluate hypothetical transactions.
+I re-valued every future NBA draft pick under the league's new **3-2-1 lottery format** (approved by the NBA Board of Governors in May 2026, effective for the 2027–2029 drafts). To my knowledge, this is the first public implementation of a fully Bayesian modeling approach to the official 3-2-1 lottery structure, providing full uncertainty for draft pick values instead of point-estimate curves.
 
-**[Interactive Dashboard](https://alexsusi2298.shinyapps.io/nbaDraftLottery/)**
-
-To my knowledge, this is the first public implementation of the official 3-2-1 lottery structure, paired with a fully Bayesian approach instead of point-estimate value curves.
+The **[Interactive Dashboard](https://alexsusi2298.shinyapps.io/nbaDraftLottery/)** includes team-level portfolio views, individual pick distributions, lottery odds, pick movers, and a trade machine to evaluate hypothetical pick deals.
 
 <br>
 
