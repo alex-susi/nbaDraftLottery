@@ -1200,6 +1200,39 @@ if (nrow(ungrouped_assets) > 0) {
 }
 
 pick_display_members <- pick_display_members %>% distinct(display_asset_id, asset_id)
+
+# Display-layer guardrail: an internal own/retained row can be a member of a
+# user-facing swap or ranked-pool entitlement. In that case it must not also be
+# exposed as its own standalone display asset, otherwise the UI double-counts
+# the same economic pick (e.g., HOU 2027 own inside the HOU/BKN swap, or BKN
+# 2028 own inside BKN's two-most-favorable ranked pool). Keep the internal row
+# for simulation, but suppress the duplicate one-to-one display row.
+duplicate_group_member_asset_ids <- pick_display_members %>%
+  count(asset_id, name = "display_n") %>%
+  filter(.data$display_n > 1L) %>%
+  pull(asset_id)
+
+if (length(duplicate_group_member_asset_ids) > 0L) {
+  duplicate_standalone_display_ids <- pick_display_members %>%
+    filter(.data$asset_id %in% duplicate_group_member_asset_ids) %>%
+    left_join(pick_display_assets %>% select(display_asset_id, group_type), by = "display_asset_id") %>%
+    left_join(pick_assets %>% select(asset_id, owner, original_team, pick_type), by = "asset_id") %>%
+    filter(
+      .data$group_type == "single_asset",
+      .data$pick_type == "own",
+      .data$owner == .data$original_team
+    ) %>%
+    pull(display_asset_id) %>%
+    unique()
+
+  if (length(duplicate_standalone_display_ids) > 0L) {
+    pick_display_assets <- pick_display_assets %>%
+      filter(!.data$display_asset_id %in% duplicate_standalone_display_ids)
+    pick_display_members <- pick_display_members %>%
+      filter(!.data$display_asset_id %in% duplicate_standalone_display_ids)
+  }
+}
+
 pick_display_assets <- pick_display_assets %>%
   distinct(display_asset_id, .keep_all = TRUE) %>%
   left_join(pick_display_members %>% 
