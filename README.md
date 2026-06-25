@@ -12,7 +12,7 @@ This project estimates how the **[NBA's new 3-2-1 Draft Lottery](https://www.nba
 
 The **[Interactive Dashboard](https://alexsusi2298.shinyapps.io/nbaDraftLottery/)** includes team-level portfolio views, individual pick distributions, lottery odds, pick movers, and a trade machine to evaluate hypothetical pick deals.
 
-> **Status:** This is an independent research / portfolio project and is not an official NBA, team, or league valuation model. Future pick obligations, protections, swaps, and conveyance rules are encoded based on public sources and were last updated as of **2026-06-24**.
+> This is an independent research / portfolio project and is not an official NBA, team, or league valuation model. Future pick obligations, protections, swaps, and conveyance rules are encoded based on public sources and were last updated as of **2026-06-22**.
 
 <br>
 
@@ -20,11 +20,10 @@ The **[Interactive Dashboard](https://alexsusi2298.shinyapps.io/nbaDraftLottery/
 
 | Tab            | Use case                                                                     |
 | -------------- | ---------------------------------------------------------------------------- |
-| About          | Plain-English explanation of the project, EPV, 4-YR WS, and the 3-2-1 system |
-| Pick Landscape | Which teams and picks gain or lose value under 3-2-1                         |
-| Team Summaries | Full team-level draft portfolio valuation                                    |
-| Single Pick    | Distribution of outcomes for one pick or pick entitlement                    |
-| Trade Machine  | Evaluate hypothetical pick trades using correlated simulation draws          |
+| Pick Landscape | A high-level view of each team's pick quantity, pick quality, and total portfolio value |
+| Team Summaries | Impact of the 3-2-1 Lottery on each team's pick portfolio, including a summary of the most affected picks |
+| Single Pick    | Distribution of outcomes for one pick                    |
+| Trade Machine  | Evaluate a real or hypothetical transaction          |
 | Methodology    | Model validation, transition matrix, and pick-value curves                   |
 
 > Replace the placeholder image paths below with screenshots from the dashboard. Recommended location: `docs/images/`.
