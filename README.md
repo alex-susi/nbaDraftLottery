@@ -111,32 +111,25 @@ Replace this table with dashboard results once the exact future second-round pic
 
 <br>
 
-## What the Model Does
 
-The project has four main components:
+
+## Methodology
 
 1. **Draft pick value curves**
 
    * Round 1 picks are modeled with a Bayesian Student-t regression on draft slot.
    * Round 2 picks are modeled separately using a hurdle model because many second-rounders never appear in an NBA game.
 
-2. **Team-strength simulation**
+2. **Team Strength simulation**
 
    * Teams move through five 3-2-1 lottery tiers using a Bayesian Markov transition model.
 
 3. **Lottery simulation**
 
-   * The model runs both the current lottery and the new 3-2-1 system.
+   * For 2027-2032, a Monte Carlo simulation projects future team tiers, and runs both the current lottery and the new 3-2-1 system.
    * It applies relegation-tier ball counts, the 12th-pick floor, no consecutive No. 1 picks, no three straight top-5 picks, and the ban on newly traded top-12 through top-15 protections.
-
-4. **Pick ownership / trade logic**
-
    * The simulation applies public future pick obligations, protections, swaps, conveyance rules, return legs, and conditional structures.
    * The trade machine evaluates hypothetical pick packages using correlated simulation draws, so team trajectories and pick outcomes remain internally consistent.
-
-<br>
-
-## Methodology
 
 **Pick value target:** first-four-year Win Shares, abbreviated **4-YR WS**. This approximates the rookie-scale, cost-controlled window and is scraped from Basketball-Reference draft classes from 1985–2021.
 
@@ -165,36 +158,178 @@ This distinction matters because a pick can have lower expected value but still 
 
 <br>
 
-### Round 1 Pick Model — `picks_Round1.stan`
+### First Round Pick Model
 
-A robust regression of first-four-year Win Shares on draft slot. The mean follows a power-law decay in pick number, and per-slot residual variance is smoothed across adjacent picks by a Gaussian random walk on the log scale. The Student-t likelihood accommodates the heavy tails of draft outcomes — occasional superstars and total busts — without the mean curve being distorted by outliers.
+A regression of first-four-year Win Shares on draft slot. The mean follows a power-law decay in pick number, and per-slot residual variance is smoothed across adjacent picks by a Gaussian random walk on the log scale. The Student-t likelihood accommodates the heavy tails of draft outcomes (superstars and busts) without the mean curve being distorted by outliers.
+
+| Parameter  | Description                                                                                                                                              |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| $\mu_p$    | Expected first-four-year Win Shares at pick $p$                                                                                                          |
+| $\alpha$   | Curve height of the top of the lottery                                                                                                                   |
+| $\beta$    | Decay exponent controlling how steeply value falls with pick number                                                                                      |
+| $\gamma$   | Baseline value the curve approaches in the late first round                                                                                              |
+| $\sigma_p$ | Slot-specific residual scale, anchored at $\sigma_1$ and propagated by the random walk                                                                   |
+| $\tau$     | Random-walk innovation scale; small $\tau$ forces $\sigma_p$ to gradually evolve across neighboring slots, large $\tau$ permits abrupt volatility shifts |
+| $z_p$      | Pick-specific movement in outcome risk relative to adjacent picks                                                                                        |
+| $\nu$      | Student-t degrees of freedom; lower $\nu$ yields heavier tails, with $\nu>2$ keeping variance finite                                                     |
+
 
 <details>
-<summary><strong>Round 1 model equations and priors</strong></summary>
+<summary><h3><code>picks_Round1.stan</code></h3></summary>
 
 <br>
 
-$$\text{ws4}*n \sim \text{Student-}t\big(\nu,\ \mu*{p[n]},\ \sigma_{p[n]}\big), \qquad \mu_p = \frac{\alpha}{p^{\beta}} + \gamma$$
+```stan
+// -----------------------------------------------------------------------------
+// 1st Round Pick NBA Draft Valuation Model
+// -----------------------------------------------------------------------------
+//
+// Model structure:
+//   1. Player outcome
+//        Each drafted player has one row. The outcome is first-4-year Win Shares.
+//
+//        ws4[n] ~ Student_t(nu, mu[pick[n]], sigma_pick[pick[n]])
+//
+//   2. Pick value curve
+//        Expected value declines smoothly from the top of the draft to the end
+//        of the first round.
+//
+//        mu[p] = alpha / p^beta + gamma
+//
+//      where:
+//        alpha controls the overall height of the curve.
+//        beta controls how quickly value falls from early to late first.
+//        gamma is the lower baseline the curve approaches later in the round.
+//
+//   3. Pick-specific outcome spread
+//        Each pick has its own player outcome spread, but nearby picks are tied
+//        together so the model does not overreact to one unusually good or bad
+//        historical pick slot.
+//
+//        log_sigma_pick[1] = log_sigma_1
+//        log_sigma_pick[p] = log_sigma_pick[p - 1]
+//                            + tau_log_sigma_rw * z_sigma_step[p - 1]
+//
+//   4. Heavy-tailed player outcomes
+//        The Student-t likelihood allows for extreme draft outcomes: 
+//        stars, busts, and other unusual player paths. 
+//        nu controls how much tail risk the model allows.
+//
+// -----------------------------------------------------------------------------
 
-$$\log \sigma_p = \log \sigma_{p-1} + \tau, z_p$$
 
-Priors:
+data {
+  int<lower=1> N;                         // Number of players
+  array[N] int<lower=1, upper=30> pick;   // Pick each player was drafted at (1-30)
+  vector[N] ws4;                          // First-4-year Win Shares
+}
 
-$$\log\alpha \sim \mathcal{N}(\log 20,\ 0.6), \qquad \alpha > 0$$
 
-$$\log\beta \sim \mathcal{N}(\log 0.55,\ 0.5), \qquad \beta > 0$$
 
-$$\gamma \sim \mathcal{N}(2,\ 3), \qquad \gamma \in \mathbb{R}$$
+parameters {
+  // ---------------------------------------------------------------------------
+  // Pick value curve: mu[p] = alpha / p^beta + gamma
+  // ---------------------------------------------------------------------------
+  real log_alpha; // Height of the first-round value curve (log scale)
+  real log_beta;  // Decline rate from early to late first round (log scale)
+  real gamma;     // Late-first-round baseline value the curve approaches.
 
-$$\log\sigma_1 \sim \mathcal{N}(\log 8,\ 0.5), \qquad \sigma_1 > 0$$
 
-$$\tau \sim \text{Half-}\mathcal{N}(0,\ 0.15), \qquad \tau \ge 0$$
+  // ---------------------------------------------------------------------------
+  // Player outcome spread by pick
+  // ---------------------------------------------------------------------------
+  real log_sigma_1;                 // Outcome spread at pick 1 (log scale)
+  vector[29] z_sigma_step;          // Pick-by-pick adjustments to the spread curve
+  real<lower=0> tau_log_sigma_rw;   // How much the spread curve can vary by pick
 
-$$z_p \sim \mathcal{N}(0,1), \qquad z_p \in \mathbb{R}$$
 
-$$\nu - 2 \sim \text{Exponential}(0.20), \qquad \nu > 2$$
+  // ---------------------------------------------------------------------------
+  // Star / bust tail risk
+  // ---------------------------------------------------------------------------
+  real<lower=2> nu; // Student-t DoF; lower values allow more extreme draft outcomes
+}
 
-where, for player $n$ drafted at pick $p[n] \in {1,\dots,30}$:
+
+
+transformed parameters {
+  real<lower=0> alpha = exp(log_alpha); // Height of value curve
+  real<lower=0> beta  = exp(log_beta);  // Decline rate
+
+  vector[30] log_sigma_pick;            // Outcome spread by pick, log scale
+  vector<lower=0>[30] sigma_pick;       // Positive outcome spread by pick
+
+  log_sigma_pick[1] = log_sigma_1;      // Start spread curve at pick 1
+
+
+  // Build spread curve for picks 2-30, nearby picks similar
+  for (p in 2:30) {
+    // Update outcome spread from previous pick.
+    log_sigma_pick[p] = log_sigma_pick[p - 1] +
+                        tau_log_sigma_rw * z_sigma_step[p - 1];
+  }
+
+  sigma_pick = exp(log_sigma_pick);     // Outcome spread from log scale to positive scale
+}
+
+
+
+model {
+  // Priors
+  log_alpha ~ normal(log(20), 0.60);    // High expected value for #1 overall pick
+  log_beta  ~ normal(log(0.55), 0.50);  // Smooth decline in value from pick 1-30
+  gamma     ~ normal(2, 3);             // Late-first round pick expected value
+
+  log_sigma_1       ~ normal(log(8), 0.50); // #1 pick outcome spread centered around 8 WS
+  z_sigma_step      ~ std_normal();         // Pick-by-pick outcome-spread adjustments
+  tau_log_sigma_rw  ~ normal(0, 0.15);      // Pick-by-pick outcome-spread curve bend
+
+  nu - 2 ~ exponential(0.20); // Finite variance while allowing stars and busts
+  
+  
+  // Likelihood
+  // Loop over historical first-round picks
+  for (n in 1:N) {
+    // Expected 4-year WS for player's draft slot
+    real mu = alpha / pow(pick[n], beta) + gamma;
+
+    ws4[n] ~ student_t(nu, mu, sigma_pick[pick[n]]);
+  }
+}
+
+
+
+generated quantities {
+  vector[30] ws4_pred;     // Expected 4-year WS by each first-round pick
+  vector[30] ws4_pred_sd;  // Player outcome spread by each first-round pick
+  vector[N] log_lik;       // Per-player log likelihood for PSIS-LOO and validation
+  vector[N] ws4_rep;       // Simulated 4-year WS for each historical player row
+
+
+  // Loop over first-round picks
+  for (p in 1:30) {
+    real mu = alpha / pow(p, beta) + gamma; // Expected 4-year WS for this pick
+
+    ws4_pred[p]    = mu;             // Expected value for this pick
+    ws4_pred_sd[p] = sigma_pick[p];  // Player outcome spread for this pick
+  }
+  
+  
+  // Loop over historical first-round picks
+  for (n in 1:N) {
+    // Expected 4-year WS for player's draft slot
+    real mu = alpha / pow(pick[n], beta) + gamma;
+
+    log_lik[n] = student_t_lpdf(ws4[n] | nu, mu, sigma_pick[pick[n]]);
+
+    ws4_rep[n] = student_t_rng(nu, mu, sigma_pick[pick[n]]);
+  }
+}
+
+```
+
+
+
+
 
 | Parameter  | Description                                                                                                                                              |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
