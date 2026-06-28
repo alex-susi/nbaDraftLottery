@@ -24,45 +24,45 @@ The **[Interactive Dashboard](https://alexsusi2298.shinyapps.io/nbaDraftLottery/
 | Team Summaries | Impact of the 3-2-1 Lottery on each team's pick portfolio, including a summary of the most affected picks |
 | Single Pick    | Distribution of outcomes for one pick                    |
 | Trade Machine  | Evaluate a real or hypothetical transaction          |
-| Methodology    | Model validation, transition matrix, and pick-value curves                   |
+| Methodology    | Model validation, transition matrix, and Pick Value Curve                   |
 
-> Replace the placeholder image paths below with screenshots from the dashboard. Recommended location: `docs/images/`.
 
-### Total EPV Leaderboard / Dumbbell Plot
+<details>
+<summary><h3>Preview Screenshots</h3></summary>
 
-![Total EPV leaderboard with dumbbell plots](docs/images/total-epv-leaderboard-dumbbell.png)
+### Total EPV Leaderboard
+
+![Total EPV leaderboard with dumbbell plots](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/epv_leaderboard.png)
 
 ### Pick Landscape
 
-![Pick landscape scatterplot](docs/images/pick-landscape-scatterplot.png)
+![Pick landscape scatterplot](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/epv_leaderboard.png)
 
 ### Team Portfolio View
 
-![Team portfolio summary](docs/images/team-portfolio-summary.png)
+![Team portfolio summary](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/epv_leaderboard.png)
 
 ### Single Pick Distribution
 
-![Single pick distribution](docs/images/single-pick-distribution.png)
+![Single pick distribution](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/epv_leaderboard.png)
 
 ### Trade Machine
 
-![Trade machine pick valuation](docs/images/trade-machine.png)
+![Trade machine pick valuation](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/epv_leaderboard.png)
 
-### Methodology / Validation View
-
-![Methodology and validation dashboard](docs/images/methodology-validation.png)
+</details>
 
 <br>
 
 ## Key Findings
 
-1. **[Finding 1]**
+1. There's a lot of uncertainty in projecting future expected pick value. Between the difficulty of projecting team performances and the increased randomness of the lottery, many indiviudal picks and total team portfolios show small changes in expected value.
 
-2. **[Finding 2]**
+2. In the long run (7 years in this case, since that's the furthest out draft picks can be traded), team performance expectations converge towards league-average (15th). As such, there is also a convergence of expected value for distant draft picks. For first-round picks, the EPV converges to around 9.2, and around 2.5 for second-round picks.
 
-3. **[Finding 3]**
+3. The largest decreases in single-pick EPV are Memphis' 2027 first round most-favorable selection of Utah, Cleveland, and Minnesota (-1.8 EPV due to Utah's pick being ineligible to land in the top 5) and Washington's own 2027 first round pick (-1.6 EPV as it cannot land #1 overall in consecutive years).
 
-4. **[Finding 4]**
+4. The largest increases in single-pick EPV are Miami's top-14 protected 2027 first round pick (+1.1 EPV) and Brooklyn's less favorable 2027 first round pick between their own and Houston's (+0.7 EPV). 
 
 5. **[Finding 5]**
 
@@ -72,14 +72,12 @@ The **[Interactive Dashboard](https://alexsusi2298.shinyapps.io/nbaDraftLottery/
 
 ### Memphis Trades Down Twice in the 2026 First Round
 
-During the first round of the 2026 NBA Draft, Memphis traded down twice:
+During the first round of the 2026 NBA Draft, [Memphis traded down twice](https://www.nba.com/news/2026-offseason-trade-tracker):
 
 1. **Memphis → Oklahoma City:** Memphis moved from **No. 16** to **No. 17** and received **two future second-round picks**.
 2. **Memphis → Detroit:** Memphis then moved from **No. 17** to **No. 21** and received **three additional future second-round picks**.
 
 The combined result: Memphis moved from **No. 16 to No. 21** and accumulated **five future second-round picks**.
-
-Sources: [NBA 2026 Offseason Trade Tracker](https://www.nba.com/news/2026-offseason-trade-tracker), [Reuters recap](https://www.reuters.com/sports/grizzlies-trade-back-twice-first-round-draft-karim-lopez--flm-2026-06-24/)
 
 This is a useful case study because it mirrors the exact type of question the dashboard is designed to answer:
 
@@ -101,9 +99,16 @@ Replace this table with dashboard results once the exact future second-round pic
 
 | Trade                       | Memphis EPV Sent | Memphis EPV Received | Net EPV | 90% Credible Interval | Probability Memphis Gains Value |
 | --------------------------- | ---------------: | -------------------: | ------: | --------------------: | ------------------------------: |
-| No. 16 → No. 17 + 2 seconds |            `[x]` |                `[x]` |   `[x]` |              `[x, x]` |                          `[x%]` |
+| No. 16 → No. 17 + 2 seconds |            `7.6` |                `[x]` |   `[x]` |              `[x, x]` |                          `[x%]` |
 | No. 17 → No. 21 + 3 seconds |            `[x]` |                `[x]` |   `[x]` |              `[x, x]` |                          `[x%]` |
 | No. 16 → No. 21 + 5 seconds |            `[x]` |                `[x]` |   `[x]` |              `[x, x]` |                          `[x%]` |
+
+| Asset                       | Receiving Team | EPV | 90% EPV |
+| --------------------------- | ---------------: | -------------------: | ------: | 
+| 2026 #16 |            OKC |                `7.6` |   `[7.1, 8.1]` |    
+| 2026 #17 |            Memphis |                `7.4` |   `[6.9, 7.9]` | 
+| 2029 Second Round Pick |            Memphis |                `2.3` |   `[1.2, 3.8]` | 
+| 2029 Second Round Pick |            Memphis |                `2.4` |   `[1.2, 3.9]` | 
 
 ### Basketball Interpretation Placeholder
 
