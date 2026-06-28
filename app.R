@@ -7,6 +7,28 @@
 #   - Moved model validation diagnostics to the Methodology tab.
 #   - Fixed conditional display labels such as 2027 SAS first to SAC/OKC range splits.
 #
+# VERSION NOTE (v48 — outgoing pick conveyance / EPV impact columns):
+#   - Trade Machine outgoing-pick tables now show conveyance probability,
+#     initial unprotected EPV, protection/swap EPV impact, and final EPV.
+#
+# VERSION NOTE (v61 — protection dropdown cleanup):
+#   - Round-aware Trade Machine protection dropdowns: first-round picks only show
+#     first-round protections; second-round picks only show second-round ranges.
+#   - Removed lottery/top-14 protection because the 3-2-1 rule bars newly traded
+#     picks from carrying top-12 through top-15 protections.
+#   - Shortened protection dropdown labels and tightened Trade Machine columns.
+#
+# VERSION NOTE (v67 — rank methodology trajectory explorer):
+#   - Reconciles duplicate display IDs before ranked-pool splitting and removes
+#     any remaining duplicate logical owner/year/round/pick labels globally.
+#   - Uses the production 30-rank team-strength Markov matrix in Methodology.
+#   - Restores the 30-rank transition matrix as an interactive Plotly heatmap
+#     with rank-to-rank probability hovers.
+#   - Replaces the tier state diagram with an interactive 7-year rank trajectory
+#     explorer, including selectable predictive intervals and an all-rank view.
+#   - Displays Methodology rank visuals as Rank 01 = best team and Rank 30 = worst
+#     team, while preserving the underlying model convention internally.
+#
 # VERSION NOTE (v25 — bug fixes + dumbbell rework):
 #   - Fixed Team Summaries and Pick Movers rendering blank: both DT tables that use
 #     escape=FALSE / custom row styling now render client-side (server = FALSE),
@@ -32,7 +54,7 @@
 #   About           — audience-facing landing page / glossary
 #   Pick Landscape  — pick scatterplot or EPV leaderboard
 #   Team Summaries      — all 30 teams with portfolio details
-#   Methodology     — transition heatmap, state diagram, pick-value curve,
+#   Methodology     — transition heatmaps, rank trajectory explorer, pick-value curve,
 #                     and model-validation diagnostics
 #   Single Pick     — one-asset value distribution
 #   Pick Movers     — pick-level EPV changes
@@ -48,6 +70,7 @@ library(plotly)
 library(DT)
 library(bslib)
 library(tidyverse)
+
 
 `%||%` <- function(x, y) if (is.null(x) || length(x) == 0) y else x
 
@@ -145,7 +168,83 @@ for (nm in c("ev_q05", "ev_q50", "ev_q95", "outcome_q10", "outcome_q90")) {
 }
 pick_curve <- pick_curve %>% arrange(.data$pick)
 
-trans_mat    <- dd$transition_matrix
+transition_matrix_export_app <- dd$transition_matrix %||% NULL
+
+# New rank-based team-strength exports retain both the 30-rank transition
+# surface and its five-tier aggregation. Accept the current export names plus
+# a few backward-compatible aliases so the Methodology tab works across saved
+# dashboard_data.rds versions.
+rank_trans_mat <- dd$rank_transition_matrix %||%
+  dd$rank_transition_matrix_mean %||%
+  dd$post_rank_trans %||%
+  dd$transition_matrix_30 %||%
+  NULL
+
+if (is.null(rank_trans_mat) && !is.null(transition_matrix_export_app) &&
+    is.matrix(transition_matrix_export_app) &&
+    identical(dim(transition_matrix_export_app), c(30L, 30L))) {
+  rank_trans_mat <- transition_matrix_export_app
+}
+
+trans_mat <- dd$tier_transition_matrix %||%
+  dd$transition_matrix_tier %||%
+  dd$post_tier_trans %||%
+  NULL
+
+if (is.null(trans_mat) && !is.null(transition_matrix_export_app) &&
+    is.matrix(transition_matrix_export_app) &&
+    identical(dim(transition_matrix_export_app), c(5L, 5L))) {
+  trans_mat <- transition_matrix_export_app
+}
+
+# If a new export contains only the 30-rank matrix, derive the legacy five-tier
+# view used by the existing heatmap/state diagram. Rows are averaged within the
+# origin tier and destination-rank probabilities are summed within each tier.
+if (is.null(trans_mat) && !is.null(rank_trans_mat) &&
+    is.matrix(rank_trans_mat) && identical(dim(rank_trans_mat), c(30L, 30L))) {
+  rank_tier_groups_app <- list(
+    relegation = 1:3,
+    nonplayin = 4:10,
+    playin_seed = 11:14,
+    playin_loser = 15:16,
+    playoff = 17:30
+  )
+  trans_mat <- matrix(
+    0,
+    nrow = length(rank_tier_groups_app),
+    ncol = length(rank_tier_groups_app),
+    dimnames = list(names(rank_tier_groups_app), names(rank_tier_groups_app))
+  )
+  for (i in seq_along(rank_tier_groups_app)) {
+    for (j in seq_along(rank_tier_groups_app)) {
+      trans_mat[i, j] <- mean(rowSums(
+        rank_trans_mat[
+          rank_tier_groups_app[[i]],
+          rank_tier_groups_app[[j]],
+          drop = FALSE
+        ],
+        na.rm = TRUE
+      ))
+    }
+  }
+}
+
+if (is.null(trans_mat)) {
+  stop("dashboard_data.rds does not contain a tier or 30-rank transition matrix.", call. = FALSE)
+}
+
+if (!is.null(rank_trans_mat)) {
+  rank_trans_mat <- as.matrix(rank_trans_mat)
+  if (identical(dim(rank_trans_mat), c(30L, 30L))) {
+    dimnames(rank_trans_mat) <- list(
+      sprintf("Rank %02d", 1:30),
+      sprintf("Rank %02d", 1:30)
+    )
+  } else {
+    warning("Ignoring rank transition export because it is not a 30x30 matrix.")
+    rank_trans_mat <- NULL
+  }
+}
 trans_counts <- dd$transition_counts
 stationary   <- dd$stationary
 tier_balls   <- dd$tier_balls
@@ -490,6 +589,15 @@ if (!is.null(dd$display_convey_new_draws) && length(dd$display_convey_new_draws)
   display_convey_new_draws <- build_display_matrix_app(asset_convey_new_draws, pick_display_members, pick_display_assets)
 }
 
+# A display asset is a single user-facing economic pick entitlement. Older or
+# intermediate dashboard exports can contain the same registry row more than
+# once. Remove repeated IDs before any ranked-pool splitting or summary work;
+# otherwise one duplicated source row becomes two duplicated ranked legs.
+pick_display_assets <- pick_display_assets %>%
+  distinct(.data$display_asset_id, .keep_all = TRUE)
+pick_display_members <- pick_display_members %>%
+  distinct(.data$display_asset_id, .data$asset_id)
+
 filter_display_cols_early_app <- function(mat, ids) {
   if (is.null(mat) || length(mat) == 0 || is.null(dim(mat)) || ncol(mat) == 0L) return(mat)
   ids <- ids[ids %in% colnames(mat)]
@@ -642,7 +750,8 @@ split_ranked_display_assets_app <- function() {
   )
 
   target[is.na(target)] <- FALSE
-  split_rows <- pick_display_assets[target, , drop = FALSE]
+  split_rows <- pick_display_assets[target, , drop = FALSE] %>%
+    distinct(.data$display_asset_id, .keep_all = TRUE)
   if (nrow(split_rows) == 0L) return(invisible(FALSE))
 
   # Helper creates first-leg and residual-leg columns from the underlying member
@@ -1218,6 +1327,35 @@ sanitize_round_protection_label_app <- function(short_label, round, owner, membe
 }
 
 
+clean_pick_display_language_app <- function(short_label) {
+  x <- stringr::str_squish(as.character(short_label %||% ""))
+  if (!nzchar(x)) return(x)
+
+  # Remove redundant recipient language inside parenthetical rank/priority labels.
+  # Examples:
+  #   R2 DAL or BKN 2nd (less favorable to DET)      -> R2 DAL or BKN (less favorable)
+  #   R1 MIL or NOP (less favorable to ATL if 5-30) -> R1 MIL or NOP (less favorable if 5-30)
+  #   R1 ATL, CLE or UTA (more favorable to ATL)    -> R1 ATL, CLE or UTA (most favorable)
+  x <- stringr::str_replace_all(x, "\\((less favorable)\\s+to\\s+[A-Z]{2,3}\\s+if\\s+([^\\)]+)\\)", "(\\1 if \\2)")
+  x <- stringr::str_replace_all(x, "\\((least favorable)\\s+to\\s+[A-Z]{2,3}\\s+if\\s+([^\\)]+)\\)", "(\\1 if \\2)")
+  x <- stringr::str_replace_all(x, "\\((more favorable)\\s+to\\s+[A-Z]{2,3}\\s+if\\s+([^\\)]+)\\)", "(\\1 if \\2)")
+  x <- stringr::str_replace_all(x, "\\((most favorable)\\s+to\\s+[A-Z]{2,3}\\s+if\\s+([^\\)]+)\\)", "(\\1 if \\2)")
+  x <- stringr::str_replace_all(x, "\\((best eligible)\\s+to\\s+[A-Z]{2,3}\\s+if\\s+([^\\)]+)\\)", "(\\1 if \\2)")
+  x <- stringr::str_replace_all(x, "\\((second most favorable)\\s+to\\s+[A-Z]{2,3}\\)", "(\\1)")
+  x <- stringr::str_replace_all(x, "\\((least favorable)\\s+to\\s+[A-Z]{2,3}\\)", "(\\1)")
+  x <- stringr::str_replace_all(x, "\\((less favorable)\\s+to\\s+[A-Z]{2,3}\\)", "(\\1)")
+  x <- stringr::str_replace_all(x, "\\((most favorable)\\s+to\\s+[A-Z]{2,3}\\)", "(\\1)")
+  x <- stringr::str_replace_all(x, "\\((best eligible)\\s+to\\s+[A-Z]{2,3}\\)", "(\\1)")
+  x <- stringr::str_replace_all(x, "\\((more favorable)\\s+to\\s+[A-Z]{2,3}\\)", "(most favorable)")
+
+  # For multi-team second-round pools, the leading R2 already communicates that
+  # these are second-round entitlements. Remove duplicated "2nd" before the
+  # priority parenthetical.
+  x <- stringr::str_replace_all(x, "\\s+2nd\\s+\\(", " (")
+  stringr::str_squish(x)
+}
+
+
 known_pick_label_override_app <- function(year, round, owner, member_original_teams, short_label,
                                           group_type = NA_character_, label = NA_character_, notes = NA_character_,
                                           fixed_slot_display = NA_character_) {
@@ -1282,9 +1420,121 @@ pick_display_assets <- pick_display_assets %>%
       year, round, owner, member_original_teams, short_label,
       group_type, label, notes, fixed_slot_display
     ),
-    trade_label = str_squish(sprintf("%d %s", year, short_label))
+    short_label_raw = short_label,
+    short_label = clean_pick_display_language_app(short_label),
+    trade_label = str_squish(sprintf("%d %s", year, short_label)),
+    trade_label_raw = str_squish(sprintf("%d %s", year, short_label_raw))
   ) %>%
   ungroup()
+
+label_cleanup_audit_app <- pick_display_assets %>%
+  filter(!is.na(.data$short_label_raw), .data$short_label_raw != .data$short_label) %>%
+  transmute(
+    owner, year, round,
+    before = .data$trade_label_raw,
+    after = .data$trade_label
+  ) %>%
+  distinct()
+
+if (nrow(label_cleanup_audit_app) > 0L) {
+  message("Cleaned ", nrow(label_cleanup_audit_app), " pick display label(s). See label_cleanup_audit_app for details.")
+}
+
+pick_display_assets <- pick_display_assets %>%
+  select(-short_label_raw, -trade_label_raw)
+
+# Final semantic guardrail. Different source display IDs can occasionally
+# resolve to the same economic pick after ranked pools are split (the prior bug
+# produced two identical BKN 2028 "most favorable" rows and two identical
+# "second most favorable" rows). Keep one active representation for each
+# owner/year/round/label combination and remove the redundant ID everywhere.
+deduplicate_logical_display_assets_app <- function() {
+  if (is.null(pick_display_assets) || nrow(pick_display_assets) == 0L) {
+    return(invisible(character(0)))
+  }
+
+  activity <- setNames(rep(0, nrow(pick_display_assets)), pick_display_assets$display_asset_id)
+  for (mat in list(display_convey_cur_draws, display_convey_new_draws)) {
+    if (!is.null(mat) && length(mat) > 0L && ncol(mat) > 0L) {
+      mat_activity <- colMeans(as.matrix(mat) > 0, na.rm = TRUE)
+      hit <- intersect(names(activity), names(mat_activity))
+      activity[hit] <- pmax(activity[hit], mat_activity[hit])
+    }
+  }
+
+  keyed <- pick_display_assets %>%
+    mutate(
+      .logical_label = stringr::str_to_lower(stringr::str_squish(as.character(.data$short_label))),
+      .logical_label = if_else(
+        is.na(.data$.logical_label) | !nzchar(.data$.logical_label),
+        paste0("__id__", .data$display_asset_id),
+        .data$.logical_label
+      ),
+      .logical_key = paste(.data$owner, .data$year, .data$round, .data$.logical_label, sep = "|") ,
+      .activity = coalesce(as.numeric(activity[.data$display_asset_id]), 0)
+    ) %>%
+    arrange(.data$.logical_key, desc(.data$.activity), .data$display_asset_id) %>%
+    group_by(.data$.logical_key) %>%
+    mutate(.keep_display_id = first(.data$display_asset_id)) %>%
+    ungroup()
+
+  stale_ids <- keyed %>%
+    filter(.data$display_asset_id != .data$.keep_display_id) %>%
+    pull(display_asset_id) %>%
+    unique()
+
+  pick_display_assets <<- keyed %>%
+    filter(.data$display_asset_id == .data$.keep_display_id) %>%
+    select(-starts_with(".logical_"), -.activity, -.keep_display_id)
+
+  if (length(stale_ids) == 0L) return(invisible(stale_ids))
+
+  keep_ids <- pick_display_assets$display_asset_id
+  pick_display_members <<- pick_display_members %>%
+    filter(.data$display_asset_id %in% .env$keep_ids) %>%
+    distinct(.data$display_asset_id, .data$asset_id)
+
+  display_asset_cur_draws <<- filter_display_cols_early_app(display_asset_cur_draws, keep_ids)
+  display_asset_new_draws <<- filter_display_cols_early_app(display_asset_new_draws, keep_ids)
+  display_asset_cur_ev_draws <<- filter_display_cols_early_app(display_asset_cur_ev_draws, keep_ids)
+  display_asset_new_ev_draws <<- filter_display_cols_early_app(display_asset_new_ev_draws, keep_ids)
+  display_convey_cur_draws <<- filter_display_cols_early_app(display_convey_cur_draws, keep_ids)
+  display_convey_new_draws <<- filter_display_cols_early_app(display_convey_new_draws, keep_ids)
+
+  pick_display_value_summary <<- pick_display_value_summary %>%
+    filter(.data$display_asset_id %in% .env$keep_ids) %>%
+    distinct(.data$display_asset_id, .keep_all = TRUE)
+  pick_display_value_ev_summary <<- pick_display_value_ev_summary %>%
+    filter(.data$display_asset_id %in% .env$keep_ids) %>%
+    distinct(.data$display_asset_id, .keep_all = TRUE)
+
+  message(sprintf(
+    "Removed %d duplicate logical pick display row%s across all app views.",
+    length(stale_ids),
+    ifelse(length(stale_ids) == 1L, "", "s")
+  ))
+  invisible(stale_ids)
+}
+
+deduplicate_logical_display_assets_app()
+
+if (anyDuplicated(pick_display_assets$display_asset_id)) {
+  stop("Duplicate display_asset_id values remain after display reconciliation.", call. = FALSE)
+}
+logical_label_check_app <- stringr::str_to_lower(stringr::str_squish(pick_display_assets$short_label))
+logical_label_check_app <- paste(
+  pick_display_assets$owner,
+  pick_display_assets$year,
+  pick_display_assets$round,
+  logical_label_check_app,
+  sep = "|"
+)
+logical_label_check_app <- logical_label_check_app[
+  !is.na(pick_display_assets$short_label) & nzchar(stringr::str_squish(pick_display_assets$short_label))
+]
+if (anyDuplicated(logical_label_check_app)) {
+  stop("Duplicate logical pick labels remain after display reconciliation.", call. = FALSE)
+}
 
 team_delta_draw_summary_app <- function(cur_mat, new_mat, asset_owner_tbl, teams, mode = c("total", "quality")) {
   mode <- match.arg(mode)
@@ -1668,20 +1918,42 @@ probability_summary_from_indicator <- function(x) {
 # Team abbreviations present in the asset registry, sorted
 all_team_abbr <- sort(unique(c(pick_display_assets$owner, pick_assets$owner, pick_assets$original_team)))
 
-# protection options offered in the Trade Machine (top-N bands; 12-15 illegal)
-protection_choices <- c(
+# Protection options offered in the Trade Machine.
+# Round 1 excludes lottery/top-14 because the 3-2-1 rule bars newly traded
+# picks from carrying top-12 through top-15 protections.
+# Round 2 uses only second-round protected ranges.
+protection_choices_round1 <- c(
   "None" = "none",
   "Top-1"  = "top1",  "Top-2"  = "top2",  "Top-3"  = "top3",  "Top-4"  = "top4",
   "Top-5"  = "top5",  "Top-6"  = "top6",  "Top-8"  = "top8",
-  "Top-10" = "top10", "Lottery (top-14)" = "lottery",
-  "Top-16" = "top16", "Top-20" = "top20",
-  "2nd protected 31-45" = "protected31_45",
-  "2nd protected 31-50" = "protected31_50",
-  "2nd protected 31-55" = "protected31_55"
+  "Top-10" = "top10", "Top-16" = "top16", "Top-20" = "top20"
 )
+
+protection_choices_round2 <- c(
+  "None" = "none",
+  "31-45 Prot." = "protected31_45",
+  "31-50 Prot." = "protected31_50",
+  "31-55 Prot." = "protected31_55"
+)
+
+protection_choices_for_round <- function(round) {
+  round <- suppressWarnings(as.integer(round %||% 1L))
+  if (!is.na(round) && round == 2L) protection_choices_round2 else protection_choices_round1
+}
+
+normalize_protection_for_round <- function(protection, round) {
+  protection <- as.character(protection %||% "none")
+  if (length(protection) == 0L || is.na(protection[1]) || !nzchar(protection[1])) {
+    return("none")
+  }
+  protection <- protection[1]
+  allowed <- unname(protection_choices_for_round(round))
+  if (protection %in% allowed) protection else "none"
+}
+
 protection_floor_app <- function(p) {
   switch(p, top1 = 1, top2 = 2, top3 = 3, top4 = 4, top5 = 5, top6 = 6,
-         top8 = 8, top10 = 10, lottery = 14, top16 = 16, top20 = 20,
+         top8 = 8, top10 = 10, top16 = 16, top20 = 20,
          protected31_45 = 45, protected31_50 = 50, protected31_55 = 55, 0)
 }
 
@@ -2297,6 +2569,121 @@ plotly_dark <- function(p, ...) {
   )
 }
 
+rank_matrix_plain <- function(m) {
+  if (is.null(m) || length(m) != 900L) return(NULL)
+  out <- matrix(suppressWarnings(as.numeric(m)), nrow = 30L, ncol = 30L)
+  if (!all(is.finite(out))) return(NULL)
+  row_sums <- rowSums(out)
+  if (any(!is.finite(row_sums)) || any(row_sums <= 0)) return(NULL)
+  out <- out / row_sums
+  dimnames(out) <- list(sprintf("Rank %02d", 1:30), sprintf("Rank %02d", 1:30))
+  out
+}
+
+# The production Markov model uses rank_worst: 1 = worst record, 30 = best.
+# Methodology visuals use the more intuitive display convention requested here:
+# Rank 01 = best team in the league, Rank 30 = worst. These helpers convert
+# only the display objects; the simulation model and dashboard data remain in
+# the production rank_worst convention.
+rank_display_matrix <- function(P) {
+  P <- rank_matrix_plain(P)
+  if (is.null(P)) return(NULL)
+  idx <- 30:1
+  out <- P[idx, idx, drop = FALSE]
+  dimnames(out) <- list(sprintf("Rank %02d", 1:30), sprintf("Rank %02d", 1:30))
+  out
+}
+
+rank_display_to_model <- function(display_rank) {
+  out <- 31L - as.integer(display_rank)
+  out[is.na(out) | out < 1L | out > 30L] <- NA_integer_
+  out
+}
+
+rank_horizon_interval_probs <- function(choice) {
+  switch(
+    as.character(choice %||% "10_90"),
+    "40_60" = c(lo = 0.40, mid = 0.50, hi = 0.60),
+    "25_75" = c(lo = 0.25, mid = 0.50, hi = 0.75),
+    "10_90" = c(lo = 0.10, mid = 0.50, hi = 0.90),
+    c(lo = 0.10, mid = 0.50, hi = 0.90)
+  )
+}
+
+rank_horizon_interval_label <- function(choice) {
+  switch(
+    as.character(choice %||% "10_90"),
+    "40_60" = "[40%, 60%]",
+    "25_75" = "[25%, 75%]",
+    "10_90" = "[10%, 90%]",
+    "[10%, 90%]"
+  )
+}
+
+rank_weighted_quantile <- function(prob, probs = c(0.10, 0.50, 0.90), values = seq_along(prob)) {
+  prob <- as.numeric(prob)
+  values <- as.numeric(values)
+  prob[!is.finite(prob)] <- 0
+  if (sum(prob) <= 0) prob <- rep(1 / length(prob), length(prob)) else prob <- prob / sum(prob)
+  o <- order(values)
+  prob <- prob[o]
+  values <- values[o]
+  cdf <- cumsum(prob)
+  vapply(probs, function(q) {
+    idx <- which(cdf >= q)[1]
+    if (is.na(idx)) values[length(values)] else values[idx]
+  }, numeric(1))
+}
+
+rank_horizon_tbl_one <- function(P, display_start_rank, max_horizon = 7L,
+                                 interval_choice = "10_90") {
+  P <- rank_matrix_plain(P)
+  if (is.null(P)) return(tibble())
+
+  display_start_rank <- as.integer(display_start_rank)
+  if (is.na(display_start_rank) || display_start_rank < 1L || display_start_rank > 30L) {
+    display_start_rank <- 15L
+  }
+  model_start_rank <- rank_display_to_model(display_start_rank)
+  if (is.na(model_start_rank)) model_start_rank <- 16L
+
+  interval_probs <- rank_horizon_interval_probs(interval_choice)
+  interval_label <- rank_horizon_interval_label(interval_choice)
+
+  v <- rep(0, 30)
+  v[model_start_rank] <- 1
+  model_ranks <- seq_len(30)
+  display_values <- 31 - model_ranks
+  out <- vector("list", max_horizon + 1L)
+
+  for (h in 0:max_horizon) {
+    qs <- rank_weighted_quantile(v, interval_probs, values = display_values)
+    mean_display_rank <- sum(display_values * v)
+    out[[h + 1L]] <- tibble(
+      years_ahead = h,
+      start_rank  = display_start_rank,
+      mean_rank   = mean_display_rank,
+      qlo         = qs[["lo"]],
+      q50         = qs[["mid"]],
+      qhi         = qs[["hi"]],
+      interval_label = interval_label,
+      hover = sprintf(
+        "Start Rank %02d<br>Years ahead: %d<br>Expected rank: %.1f<br>Median rank: %02d<br>%s interval: Rank %02d to Rank %02d",
+        display_start_rank, h, mean_display_rank, qs[["mid"]], interval_label, qs[["lo"]], qs[["hi"]]
+      )
+    )
+    v <- as.numeric(v %*% P)
+  }
+
+  bind_rows(out)
+}
+
+rank_horizon_tbl_all <- function(P, max_horizon = 7L, interval_choice = "10_90") {
+  bind_rows(lapply(seq_len(30), function(r) {
+    rank_horizon_tbl_one(P, r, max_horizon, interval_choice)
+  }))
+}
+
 
 # ============================================================================
 # UI
@@ -2510,18 +2897,23 @@ ui <- page_navbar(
     }
     .tm-page .tm-pick-table {
       overflow-x: visible !important;
+      max-width: 100%;
     }
     .tm-page .tm-pick-table table {
       width: 100%;
+      min-width: 0;
       table-layout: fixed;
       border-collapse: collapse;
-      font-size: 14px;
+      font-size: 12px;
     }
     .tm-page .tm-pick-table th {
       color: #d0d0d0;
       font-weight: 700;
-      padding: 5px 6px;
+      padding: 5px 4px;
       border-bottom: 1px solid #1a1a2a;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      line-height: 1.15;
     }
     .tm-page .tm-pick-table td {
       padding: 5px 6px;
@@ -2551,6 +2943,21 @@ ui <- page_navbar(
     }
     .tm-page .tm-pick-table .form-group {
       margin-bottom: 0;
+    }
+    .tm-page .tm-pick-table .tm-protection-select {
+      min-width: 118px;
+      max-width: 145px;
+    }
+    .tm-page .tm-pick-table .tm-protection-select .selectize-input,
+    .tm-page .tm-pick-table .tm-protection-select .selectize-input > div,
+    .tm-page .tm-pick-table .tm-protection-select .selectize-dropdown .option {
+      white-space: nowrap !important;
+      overflow-wrap: normal !important;
+      word-break: keep-all !important;
+    }
+    .tm-page .tm-pick-table .tm-protection-select .selectize-dropdown .option {
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
     }
     .tm-page .tm-pick-table .checkbox {
       margin: 0;
@@ -3195,12 +3602,55 @@ ui <- page_navbar(
       layout_columns(
         col_widths = c(6, 6),
         card(
-          card_header("Tier Transition Probabilities"),
-          plotlyOutput("trans_heatmap", height = "360px")
+          card_header(
+            div(
+              style = "display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%;",
+              span("Team-Strength Transition Matrix"),
+              div(
+                style = "width:170px; margin-bottom:-14px;",
+                selectInput(
+                  "methodology_matrix_type",
+                  NULL,
+                  choices = c("Tier Matrix" = "tier", "30 Rank" = "rank"),
+                  selected = "tier",
+                  width = "100%"
+                )
+              )
+            )
+          ),
+          plotlyOutput("methodology_transition_heatmap", height = "390px")
         ),
         card(
-          card_header("Tier Transition State Diagram"),
-          plotOutput("trans_diagram", height = "360px")
+          card_header(
+            div(
+              style = "display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; flex-wrap:wrap;",
+              span("Seven-Year Rank Trajectory"),
+              div(
+                style = "display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:-14px;",
+                div(
+                  style = "width:175px;",
+                  selectInput(
+                    "rank_horizon_start_rank",
+                    NULL,
+                    choices = c("All ranks" = "all", setNames(as.character(1:30), sprintf("Rank %02d", 1:30))),
+                    selected = "15",
+                    width = "100%"
+                  )
+                ),
+                div(
+                  style = "width:155px;",
+                  selectInput(
+                    "rank_horizon_interval",
+                    NULL,
+                    choices = c("[40%, 60%]" = "40_60", "[25%, 75%]" = "25_75", "[10%, 90%]" = "10_90"),
+                    selected = "10_90",
+                    width = "100%"
+                  )
+                )
+              )
+            )
+          ),
+          plotlyOutput("rank_horizon_plot", height = "390px")
         )
       ),
       layout_columns(
@@ -3821,8 +4271,8 @@ server <- function(input, output, session) {
         `#Pk` = fmt_num1_app(.data$n_picks_mean),
         `Current EPV` = fmt_num1_app(.data$current_mean),
         `3-2-1 EPV` = fmt_num1_app(.data$new_mean),
-        `Δ EPV` = delta_epv_html,
-        `Δ%` = delta_pct_html
+        "\u0394 EPV" := delta_epv_html,
+        "\u0394 %" := delta_pct_html
       )
 
     datatable(
@@ -3986,8 +4436,85 @@ server <- function(input, output, session) {
     )
   })
 
-  # ---- Transition heatmap ----
-  output$trans_heatmap <- renderPlotly({
+  # ---- Methodology transition heatmap: tier matrix or full 30-rank matrix ----
+  output$methodology_transition_heatmap <- renderPlotly({
+    matrix_type <- as.character(input$methodology_matrix_type %||% "tier")
+
+    if (identical(matrix_type, "rank")) {
+      m <- rank_display_matrix(rank_trans_mat)
+      if (is.null(m)) {
+        return(
+          plot_ly() %>%
+            plotly_dark(
+              annotations = list(list(
+                text = "A valid 30 x 30 rank transition matrix was not found in dashboard_data.rds.",
+                x = 0.5, y = 0.5, xref = "paper", yref = "paper",
+                showarrow = FALSE, font = list(color = "#d1d5db", size = 14)
+              )),
+              xaxis = list(visible = FALSE),
+              yaxis = list(visible = FALSE)
+            )
+        )
+      }
+
+      rank_names <- sprintf("Rank %02d", 1:30)
+      rank_labels <- sprintf("%02d", 1:30)
+      z <- round(100 * m[rank_names, rank_names, drop = FALSE], 2)
+      dimnames(z) <- list(rank_labels, rank_labels)
+      hover_txt <- outer(
+        rank_labels,
+        rank_labels,
+        Vectorize(function(from_rank, to_rank) {
+          sprintf(
+            "From Rank %s in Year t<br>To Rank %s in Year t + 1<br>Probability: %.2f%%",
+            from_rank, to_rank, z[from_rank, to_rank]
+          )
+        })
+      )
+
+      return(
+        plot_ly(
+          x = rank_labels,
+          y = rank_labels,
+          z = z,
+          type = "heatmap",
+          colorscale = list(
+            c(0.00, "#0f0f1a"),
+            c(0.35, "#172554"),
+            c(0.70, "#4c1d95"),
+            c(1.00, "#a78bfa")
+          ),
+          text = hover_txt,
+          hovertemplate = "%{text}<extra></extra>",
+          showscale = TRUE
+        ) %>%
+          plotly_dark(
+            xaxis = list(
+              title = "Year t + 1 Rank",
+              side = "bottom",
+              tickangle = -45,
+              tickmode = "array",
+              tickvals = rank_labels,
+              ticktext = rank_labels,
+              categoryorder = "array",
+              categoryarray = rank_labels,
+              automargin = TRUE
+            ),
+            yaxis = list(
+              title = "Year t Rank",
+              tickmode = "array",
+              tickvals = rank_labels,
+              ticktext = rank_labels,
+              categoryorder = "array",
+              categoryarray = rank_labels,
+              autorange = "reversed",
+              automargin = TRUE
+            ),
+            margin = list(l = 75, r = 45, t = 18, b = 82)
+          )
+      )
+    }
+
     m <- trans_mat
     y_order <- rev(rownames(m))
     m_y <- m[y_order, , drop = FALSE]
@@ -3999,55 +4526,121 @@ server <- function(input, output, session) {
       colorscale = list(c(0, "#0f0f1a"), c(1, "#6d28d9")),
       text = matrix(sprintf("%.1f%%", z), nrow = nrow(z)),
       texttemplate = "%{text}", textfont = list(size = 10, color = "#ddd"),
-      hovertemplate = "From %{y} to %{x}<br>Probability: %{z:.1f}%<extra></extra>"
+      hovertemplate = "From %{y} in Year t<br>To %{x} in Year t + 1<br>Probability: %{z:.1f}%<extra></extra>"
     ) %>%
       plotly_dark(
         xaxis = list(title = list(text = "Year t + 1", standoff = 24), side = "bottom", automargin = TRUE),
         yaxis = list(title = list(text = "Year t", standoff = 42), autorange = "reversed", automargin = TRUE),
-        margin = list(l = 95, r = 30, t = 30, b = 75)
+        margin = list(l = 95, r = 30, t = 28, b = 75)
       )
   })
 
-  # ---- Transition state diagram ----
-  output$trans_diagram <- renderPlot({
-    par(bg = "#0f0f1a", mar = c(0, 0, 0, 0))
-    K <- length(TIERS)
-    # circular layout
-    ang <- seq(pi/2, pi/2 - 2*pi, length.out = K + 1)[1:K]
-    xs <- cos(ang); ys <- sin(ang)
-    plot(xs, ys, type = "n", xlim = c(-1.6, 1.6), ylim = c(-1.6, 1.6),
-         axes = FALSE, xlab = "", ylab = "", asp = 1)
+  # ---- Seven-year rank horizon trajectory ----
+  output$rank_horizon_plot <- renderPlotly({
+    interval_choice <- input$rank_horizon_interval %||% "10_90"
+    interval_label <- rank_horizon_interval_label(interval_choice)
+    selected_rank <- as.character(input$rank_horizon_start_rank %||% "15")
 
-    # draw edges with width ~ probability (skip tiny ones)
-    for (i in 1:K) for (j in 1:K) {
-      p <- trans_mat[i, j]
-      if (p < 0.05) next
-      if (i == j) {
-        # self-loop label only (drawn as node ring later)
-        next
+    if (identical(selected_rank, "all")) {
+      tbl <- rank_horizon_tbl_all(rank_trans_mat, 7L, interval_choice)
+    } else {
+      tbl <- rank_horizon_tbl_one(rank_trans_mat, selected_rank, 7L, interval_choice)
+    }
+
+    if (nrow(tbl) == 0) {
+      return(
+        plot_ly() %>%
+          plotly_dark(
+            annotations = list(list(
+              text = "A valid 30 x 30 rank transition matrix was not found in dashboard_data.rds.",
+              x = 0.5, y = 0.5, xref = "paper", yref = "paper",
+              showarrow = FALSE, font = list(color = "#d1d5db", size = 14)
+            )),
+            xaxis = list(visible = FALSE),
+            yaxis = list(visible = FALSE)
+          )
+      )
+    }
+
+    if (identical(selected_rank, "all")) {
+      tbl <- tbl %>% mutate(start_label = sprintf("Rank %02d", .data$start_rank))
+      p <- plot_ly()
+      for (sr in seq_len(30)) {
+        d <- tbl %>% filter(.data$start_rank == sr)
+        rank_col <- rainbow(30, start = 0.58, end = 0.96)[sr]
+        p <- p %>%
+          add_lines(
+            data = d,
+            x = ~years_ahead,
+            y = ~mean_rank,
+            name = sprintf("%02d", sr),
+            text = ~hover,
+            hovertemplate = "%{text}<extra></extra>",
+            line = list(color = rank_col, width = 1.45),
+            showlegend = FALSE
+          )
       }
-      x0 <- xs[i]; y0 <- ys[i]; x1 <- xs[j]; y1 <- ys[j]
-      # shorten so arrows don't overlap nodes
-      dx <- x1 - x0; dy <- y1 - y0; len <- sqrt(dx^2 + dy^2)
-      ux <- dx/len; uy <- dy/len
-      r <- 0.22
-      arrows(x0 + ux*r, y0 + uy*r, x1 - ux*r, y1 - uy*r,
-             length = 0.08, lwd = 1 + p * 8,
-             col = adjustcolor("#6d28d9", alpha.f = min(1, 0.25 + p)))
+      title_text <- sprintf("All Starting Ranks: Next Seven Seasons (%s interval in hover)", interval_label)
+    } else {
+      start_rank <- as.integer(selected_rank)
+      if (is.na(start_rank)) start_rank <- 15L
+      p <- plot_ly(tbl, x = ~years_ahead) %>%
+        add_ribbons(
+          ymin = ~qlo,
+          ymax = ~qhi,
+          name = interval_label,
+          fillcolor = "rgba(96, 165, 250, 0.18)",
+          line = list(color = "rgba(96, 165, 250, 0)"),
+          hoverinfo = "skip"
+        ) %>%
+        add_lines(
+          y = ~mean_rank,
+          name = "Expected rank",
+          line = list(color = "#60a5fa", width = 3),
+          text = ~hover,
+          hovertemplate = "%{text}<extra></extra>"
+        ) %>%
+        add_markers(
+          y = ~mean_rank,
+          name = "Expected rank",
+          marker = list(size = 5, color = "#60a5fa"),
+          text = ~hover,
+          hovertemplate = "%{text}<extra></extra>",
+          showlegend = FALSE
+        )
+      title_text <- sprintf("Start Rank %02d: Next Seven Seasons", start_rank)
     }
 
-    # nodes with self-loop probability shown
-    cols <- tier_colors[TIERS]
-    for (i in 1:K) {
-      sp <- trans_mat[i, i]
-      symbols(xs[i], ys[i], circles = 0.20, add = TRUE, inches = FALSE,
-              bg = adjustcolor(cols[i], alpha.f = 0.85), fg = "#ddd")
-      text(xs[i], ys[i] + 0.005, tier_short[TIERS[i]],
-           col = "white", cex = 0.8, font = 2)
-      text(xs[i], ys[i] - 0.30, sprintf("stay %.0f%%", sp * 100),
-           col = "#aaa", cex = 0.7)
-    }
-    title(main = "", col.main = "#ddd")
+    p %>%
+      plotly_dark(
+        title = list(
+          text = title_text,
+          font = list(color = "#e5e7eb", size = 13)
+        ),
+        xaxis = list(
+          title = "Years Ahead",
+          tickmode = "linear",
+          dtick = 1,
+          range = c(0, 7),
+          automargin = TRUE
+        ),
+        yaxis = list(
+          title = "League Rank (1 = best)",
+          range = c(30.5, 0.5),
+          tickmode = "array",
+          tickvals = 1:30,
+          ticktext = sprintf("%02d", 1:30),
+          automargin = TRUE
+        ),
+        legend = list(
+          orientation = "h",
+          x = 0.5,
+          xanchor = "center",
+          y = -0.24,
+          yanchor = "top"
+        ),
+        margin = list(l = 70, r = 20, t = 38, b = 70)
+      )
   })
 
   # ---- Pick value curves ----
@@ -4255,6 +4848,18 @@ server <- function(input, output, session) {
       else tags$span(style = "color:#ef4444; font-weight:900;", "CHECK")
     }
 
+
+    validation_model_display_name_app <- function(model) {
+      src <- stringr::str_squish(as.character(model %||% ""))
+      dplyr::case_when(
+        src %in% c("picks_Round1.stan", "picks_Round1", "pick_value_v3_r1", "pick_value_v3", "Round 1 pick value") ~ "picks_Round1.stan",
+        src %in% c("picks_Round2.stan", "picks_Round2", "pick_play_r2_v6_declining_upside", "Round 2 hurdle") ~ "picks_Round2.stan",
+        stringr::str_detect(src, "team_strength_v3") ~ "team_strength_v3.stan",
+        src %in% c("team_strength", "team_strength_v2", "Team-strength Markov") ~ "team_strength_v3.stan",
+        TRUE ~ src
+      )
+    }
+
     loo_row_from_summary <- function(model_name, lsum) {
       if (is.null(lsum) || !is.data.frame(lsum) || nrow(lsum) == 0L) return(NULL)
       lsum <- as_tibble(lsum)
@@ -4274,7 +4879,7 @@ server <- function(input, output, session) {
 
     fallback_tbl <- bind_rows(
       tibble(
-        model = "Round 1 pick value",
+        model = "picks_Round1.stan",
         check = "R-hat / ESS",
         metric = sprintf("max R-hat %s; min bulk-ESS %s",
                          fmt_metric(pm$max_rhat, 3),
@@ -4282,16 +4887,16 @@ server <- function(input, output, session) {
         pass = ifelse(is.null(pm$max_rhat), NA, pm$max_rhat <= 1.01)
       ),
       tibble(
-        model = "Round 1 pick value",
+        model = "picks_Round1.stan",
         check = "Posterior predictive coverage",
         metric = sprintf("90%% %s coverage %s%%",
                          pm$ppc_level %||% "player-row",
                          ifelse(is.null(pm$ppc_cover), "—", sprintf("%.0f", 100 * pm$ppc_cover))),
         pass = ifelse(is.null(pm$ppc_cover), NA, pm$ppc_cover >= 0.70)
       ),
-      loo_row_from_summary("Round 1 pick value", pm$loo_summary),
+      loo_row_from_summary("picks_Round1.stan", pm$loo_summary),
       if (!is.null(pm2)) tibble(
-        model = "Round 2 hurdle",
+        model = "picks_Round2.stan",
         check = "R-hat / ESS",
         metric = sprintf("max R-hat %s; min bulk-ESS %s",
                          fmt_metric(pm2$max_rhat, 3),
@@ -4299,7 +4904,7 @@ server <- function(input, output, session) {
         pass = ifelse(is.null(pm2$max_rhat), NA, pm2$max_rhat <= 1.01)
       ),
       if (!is.null(pm2)) tibble(
-        model = "Round 2 hurdle",
+        model = "picks_Round2.stan",
         check = "Posterior predictive / play rate",
         metric = sprintf("90%% PPC %s%%; empirical play %.1f%%; P(play) #31/#45/#60 %.1f%% / %.1f%% / %.1f%%",
                          ifelse(is.null(pm2$ppc_cover), "—", sprintf("%.0f", 100 * pm2$ppc_cover)),
@@ -4309,9 +4914,9 @@ server <- function(input, output, session) {
                          100 * (pm2$p_play_60 %||% NA_real_)),
         pass = ifelse(is.null(pm2$ppc_cover), NA, pm2$ppc_cover >= 0.70)
       ),
-      if (!is.null(pm2)) loo_row_from_summary("Round 2 hurdle", pm2$loo_summary),
+      if (!is.null(pm2)) loo_row_from_summary("picks_Round2.stan", pm2$loo_summary),
       tibble(
-        model = "Team-strength Markov",
+        model = "team_strength_v3.stan",
         check = "Transition-matrix code check",
         metric = sprintf("%s transitions over %s seasons; Stan vs closed-form max diff %s; mixing time %s seasons",
                          ifelse(is.null(mk$n_transitions), "—", format(mk$n_transitions, big.mark = ",")),
@@ -4320,18 +4925,7 @@ server <- function(input, output, session) {
                          fmt_metric(mk$mixing_time, 1)),
         pass = ifelse(is.null(mk$max_abs_diff), NA, mk$max_abs_diff < 0.01)
       ),
-      tibble(
-        model = "Validation script",
-        check = "NUTS geometry",
-        metric = "Displayed from 03_validation/validation_decision_table_latest_models.csv when 05_model_validation.R has been run; target is 0 divergences, 0 max-treedepth hits, E-BFMI > 0.30.",
-        pass = NA
-      ),
-      tibble(
-        model = "Validation script",
-        check = "SBC rank uniformity",
-        metric = "Displayed from 03_validation/validation_decision_table_latest_models.csv when SBC is run; approximately uniform ranks indicate calibrated Bayesian uncertainty.",
-        pass = NA
-      )
+      NULL
     )
 
     why_for_check_app <- function(check) {
@@ -4347,15 +4941,48 @@ server <- function(input, output, session) {
       )
     }
 
-    diag_tbl <- if (!is.null(validation_decision_tbl) && nrow(validation_decision_tbl) > 0L &&
-                    all(c("model", "check", "metric", "pass") %in% names(validation_decision_tbl))) {
+    dashboard_diag_available <- is.list(stan_diag) && length(stan_diag) > 0L &&
+      (!is.null(stan_diag$pick_model) || !is.null(stan_diag$pick2_model) || !is.null(stan_diag$markov_model))
+    csv_diag_available <- !is.null(validation_decision_tbl) && nrow(validation_decision_tbl) > 0L &&
+      all(c("model", "check", "metric", "pass") %in% names(validation_decision_tbl))
+
+    # Default to the validation metrics bundled inside dashboard_data.rds so the
+    # app reflects the exact model stack used to build the current dashboard.
+    # The CSV written by 05_model_validation_rank_v3.R is retained only as a
+    # fallback for standalone validation-review sessions where the RDS has no
+    # embedded diagnostics.
+    validation_source_app <- if (dashboard_diag_available) "dashboard_data.rds" else if (csv_diag_available) "validation_csv" else "dashboard_data.rds_empty"
+    diag_tbl <- if (dashboard_diag_available) {
+      fallback_tbl
+    } else if (csv_diag_available) {
       validation_decision_tbl %>% mutate(pass = as.logical(.data$pass))
     } else {
       fallback_tbl
     }
     if (!"why" %in% names(diag_tbl)) diag_tbl$why <- NA_character_
     diag_tbl <- diag_tbl %>%
-      mutate(why = coalesce(as.character(.data$why), why_for_check_app(.data$check)))
+      mutate(
+        source_model = as.character(.data$model),
+        model = validation_model_display_name_app(.data$model),
+        why = coalesce(as.character(.data$why), why_for_check_app(.data$check)),
+        model_order = dplyr::case_when(
+          .data$model == "picks_Round1.stan" ~ 1L,
+          .data$model == "picks_Round2.stan" ~ 2L,
+          .data$model == "team_strength_v3.stan" ~ 3L,
+          TRUE ~ 99L
+        ),
+        check_order = dplyr::case_when(
+          stringr::str_detect(stringr::str_to_lower(.data$check), "r-hat|rhat|ess") ~ 1L,
+          stringr::str_detect(stringr::str_to_lower(.data$check), "nuts|geometry|divergence|tree") ~ 2L,
+          stringr::str_detect(stringr::str_to_lower(.data$check), "posterior predictive|ppc|play rate") ~ 3L,
+          stringr::str_detect(stringr::str_to_lower(.data$check), "loo|pareto") ~ 4L,
+          stringr::str_detect(stringr::str_to_lower(.data$check), "sbc|rank uniformity") ~ 5L,
+          stringr::str_detect(stringr::str_to_lower(.data$check), "transition|markov") ~ 6L,
+          TRUE ~ 50L
+        )
+      ) %>%
+      arrange(.data$model_order, .data$model, .data$check_order, .data$check) %>%
+      select(-model_order, -check_order)
 
     table_tag <- tags$table(
       style = "width:100%; border-collapse:collapse; font-size:12px; table-layout:fixed;",
@@ -4381,10 +5008,12 @@ server <- function(input, output, session) {
     tags$div(style = "font-size:12px; color:#bbb; line-height:1.65;",
       table_tag,
       tags$div(style = "margin-top:10px; color:#888;",
-        if (!is.null(validation_decision_tbl) && nrow(validation_decision_tbl) > 0L) {
-          sprintf("Loaded validation decision table from %s.", validation_decision_path)
+        if (identical(validation_source_app, "dashboard_data.rds")) {
+          "Loaded validation metrics from dashboard_data.rds. Rebuild dashboard_data.rds after model changes to refresh these metrics."
+        } else if (identical(validation_source_app, "validation_csv")) {
+          sprintf("dashboard_data.rds did not include embedded diagnostics, so this table is using fallback validation CSV: %s.", validation_decision_path)
         } else {
-          "Using dashboard-bundled diagnostics. Run 05_model_validation.R to populate the full SBC / LOO / NUTS decision table in 03_validation/."
+          "dashboard_data.rds did not include embedded diagnostics. Rebuild the pipeline to populate dd$stan_diagnostics."
         }
       )
     )
@@ -4662,7 +5291,7 @@ server <- function(input, output, session) {
     if (is.null(rows) || nrow(rows) == 0L) {
       return(tibble(
         Owner = character(), Year = integer(), Round = integer(),
-        Pick = character(), Current = numeric(), `3-2-1` = numeric(), `Δ EPV` = numeric(), `Δ EPV %` = numeric()
+        Pick = character(), Current = character(), `3-2-1` = character(), `Delta EPV` = character(), `Delta EPV %` = character()
       ))
     }
 
@@ -4674,12 +5303,21 @@ server <- function(input, output, session) {
         `3-2-1` = fmt_num1_app(.data$new_mean),
         delta_epv_num = round(.data$delta, 1),
         delta_epv_pct_num = round(ifelse(abs(.data$cur_mean) > 1e-9, .data$delta / .data$cur_mean * 100, NA_real_), 1),
-        `Δ EPV` = sprintf("<span style='color:%s; white-space:nowrap;'>%s</span>", delta_color_app(.data$delta), fmt_delta1_app(.data$delta)),
-        `Δ EPV %` = sprintf("<span style='color:%s; white-space:nowrap;'>%s</span>", delta_color_app(ifelse(abs(.data$cur_mean) > 1e-9, .data$delta / .data$cur_mean * 100, NA_real_)), fmt_delta1_app(ifelse(abs(.data$cur_mean) > 1e-9, .data$delta / .data$cur_mean * 100, NA_real_), suffix = "%"))
+        `Delta EPV` = sprintf("<span style='color:%s; white-space:nowrap;'>%s</span>", delta_color_app(.data$delta), fmt_delta1_app(.data$delta)),
+        `Delta EPV %` = sprintf("<span style='color:%s; white-space:nowrap;'>%s</span>", delta_color_app(ifelse(abs(.data$cur_mean) > 1e-9, .data$delta / .data$cur_mean * 100, NA_real_)), fmt_delta1_app(ifelse(abs(.data$cur_mean) > 1e-9, .data$delta / .data$cur_mean * 100, NA_real_), suffix = "%"))
       ) %>%
       arrange(desc(.data$delta), .data$year, .data$round, .data$owner, .data$short_label) %>%
-      transmute(Owner, Year = as.integer(.data$year),
-                Round = .data$round, Pick, Current, `3-2-1`, `Δ EPV`, `Δ EPV %`)
+      transmute(
+        Owner,
+        Year = as.integer(.data$year),
+        Round = .data$round,
+        Pick,
+        Current,
+        `3-2-1`,
+        `Delta EPV`,
+        `Delta EPV %`
+      ) %>%
+      mutate(across(where(is.character), enc2utf8))
   }
 
   output$pm_ev_table <- renderDT({
@@ -4934,7 +5572,7 @@ server <- function(input, output, session) {
 
     pid <- paste0("prot_", side, "_", safe_id(ctrl_id))
     sid <- paste0("swap_", side, "_", safe_id(ctrl_id))
-    prot <- input[[pid]]
+    prot <- normalize_protection_for_round(input[[pid]] %||% "none", r$round)
     swap <- isTRUE(input[[sid]])
     yc   <- as.character(r$year)
 
@@ -4997,7 +5635,7 @@ server <- function(input, output, session) {
 
     pid <- paste0("prot_", side, "_", safe_id(ctrl_id))
     sid <- paste0("swap_", side, "_", safe_id(ctrl_id))
-    prot <- input[[pid]]
+    prot <- normalize_protection_for_round(input[[pid]] %||% "none", r$round)
     swap <- isTRUE(input[[sid]])
     yc   <- as.character(r$year)
 
@@ -5064,6 +5702,115 @@ server <- function(input, output, session) {
     rowSums(cols)
   }
 
+  # Initial EPV is the value of the underlying original-team pick before
+  # user-added protection / swap constraints. Final EPV is the value actually
+  # sent to the receiver after the table toggles are applied.
+  underlying_pick_initial_ev_value <- function(aid) {
+    r <- pick_assets %>% filter(asset_id == aid)
+    if (nrow(r) == 0) return(zero_trade_vec())
+
+    if (r$year == 2026L && !is.na(r$fixed_slot)) {
+      val <- slot_value_vec(rep(r$fixed_slot, nrow(asset_new_draws)))
+      val[is.na(val)] <- 0
+      return(val)
+    }
+
+    if (!aid %in% colnames(asset_slot_new_draws)) {
+      return(underlying_pick_ev_base(aid))
+    }
+
+    og_slot <- asset_slot_new_draws[, aid]
+    val <- slot_value_vec(og_slot)
+    val[is.na(val)] <- 0
+    val
+  }
+
+  sent_pick_convey_prob <- function(aid, side, receiver, ctrl_id = aid) {
+    r <- pick_assets %>% filter(asset_id == aid)
+    if (nrow(r) == 0) return(NA_real_)
+    if (r$year == 2026L && !is.na(r$fixed_slot)) return(1)
+
+    pid <- paste0("prot_", side, "_", safe_id(ctrl_id))
+    sid <- paste0("swap_", side, "_", safe_id(ctrl_id))
+    prot <- normalize_protection_for_round(input[[pid]] %||% "none", r$round)
+    swap <- isTRUE(input[[sid]])
+
+    if (!aid %in% colnames(asset_slot_new_draws)) return(NA_real_)
+    og_slot <- asset_slot_new_draws[, aid]
+
+    if (swap) {
+      rc_slot <- receiver_slot_vec(receiver, r$year, r$round, "new")
+      eligible <- !is.na(og_slot) & pick_conveys_app(og_slot, prot)
+      exercised <- eligible & !is.na(rc_slot) & og_slot < rc_slot
+      return(mean(exercised, na.rm = TRUE))
+    }
+
+    if (!is.null(prot) && prot != "none") {
+      conveys <- !is.na(og_slot) & pick_conveys_app(og_slot, prot)
+      return(mean(conveys, na.rm = TRUE))
+    }
+
+    if (aid %in% colnames(asset_convey_new_draws)) {
+      return(mean(asset_convey_new_draws[, aid] > 0, na.rm = TRUE))
+    }
+
+    1
+  }
+
+  sent_display_initial_ev_value <- function(display_id, side, receiver) {
+    ids <- display_member_ids(display_id)
+    ids <- ids[ids %in% colnames(asset_new_draws)]
+    if (length(ids) == 0) return(zero_trade_vec())
+
+    if (length(ids) == 1L && display_is_single_leg(display_id)) {
+      return(underlying_pick_initial_ev_value(ids[1]))
+    }
+
+    # Complex / grouped display entitlements already embed their as-is
+    # protection/swap allocation. They are not editable with the simple toggles,
+    # so initial and final EPV are the same in the outgoing table.
+    sent_display_ev_value(display_id, side, receiver)
+  }
+
+  sent_display_convey_prob <- function(display_id, side, receiver) {
+    ids <- display_member_ids(display_id)
+    ids <- ids[ids %in% colnames(asset_new_draws)]
+    if (length(ids) == 0) return(NA_real_)
+
+    if (length(ids) == 1L && display_is_single_leg(display_id)) {
+      return(sent_pick_convey_prob(ids[1], side, receiver, ctrl_id = display_id))
+    }
+
+    if (display_id %in% colnames(display_convey_new_draws)) {
+      return(mean(display_convey_new_draws[, display_id] > 0, na.rm = TRUE))
+    }
+
+    1
+  }
+
+  sent_display_epv_impact_value <- function(display_id, side, receiver) {
+    sent_display_ev_value(display_id, side, receiver) -
+      sent_display_initial_ev_value(display_id, side, receiver)
+  }
+  
+  side_initial_ev_value <- function(ids, side, receiver) {
+    if (is.null(ids) || length(ids) == 0) return(zero_trade_vec())
+    cols <- vapply(ids, function(did) sent_display_initial_ev_value(did, side, receiver),
+                   numeric(nrow(asset_new_draws)))
+    if (is.null(dim(cols))) return(cols)
+    rowSums(cols)
+  }
+
+  side_epv_impact_value <- function(ids, side, receiver) {
+    if (is.null(ids) || length(ids) == 0) return(zero_trade_vec())
+    side_out_ev_value(ids, side, receiver) - side_initial_ev_value(ids, side, receiver)
+  }
+
+  format_trade_pct <- function(x) {
+    if (!is.finite(x)) return("—")
+    sprintf("%.0f%%", 100 * pmin(pmax(x, 0), 1))
+  }
+
   side_out_ev_value <- function(ids, side, receiver) {
     if (is.null(ids) || length(ids) == 0) return(zero_trade_vec())
     cols <- vapply(ids, function(did) sent_display_ev_value(did, side, receiver),
@@ -5104,6 +5851,8 @@ server <- function(input, output, session) {
   render_trade_pick_table <- function(ids, side, receiver, pad_to = NULL) {
     if (is.null(ids)) ids <- character(0)
     rows <- pick_display_assets %>% filter(.data$display_asset_id %in% ids)
+    convey_header <- sprintf("Convey to %s", receiver %||% "Other")
+
     if (nrow(rows) == 0L && (is.null(pad_to) || pad_to <= 0L)) {
       return(tags$div(style = "font-size:13px; color:#666; padding:4px 0;", "No picks selected"))
     }
@@ -5115,13 +5864,22 @@ server <- function(input, output, session) {
       sid <- paste0("swap_", side, "_", safe_id(did))
       locked <- r$year == 2026
       eligible <- display_is_single_leg(did) && !locked
+      prot_choices <- protection_choices_for_round(r$round)
+      prot_selected <- normalize_protection_for_round(input[[pid]] %||% "none", r$round)
 
-      ev_stat <- trade_pick_stats(sent_display_ev_value(did, side, receiver))
+      convey_prob <- sent_display_convey_prob(did, side, receiver)
+      initial_stat <- trade_pick_stats(sent_display_initial_ev_value(did, side, receiver))
+      impact_stat  <- trade_pick_stats(sent_display_epv_impact_value(did, side, receiver))
+      final_stat   <- trade_pick_stats(sent_display_ev_value(did, side, receiver))
+
       tags$tr(
-        tags$td(style = "max-width:0; font-size:15px;", tags$strong(class = "tm-pick-label", r$trade_label)),
-        tags$td(if (eligible) selectInput(pid, NULL, choices = protection_choices, selected = input[[pid]] %||% "none", width = "115px") else tags$span(style = "color:#777;", "N/A")),
+        tags$td(style = "max-width:0; font-size:14px;", tags$strong(class = "tm-pick-label", r$trade_label)),
+        tags$td(if (eligible) tags$div(class = "tm-protection-select", selectInput(pid, NULL, choices = prot_choices, selected = prot_selected, width = "100%")) else tags$span(style = "color:#777;", "N/A")),
         tags$td(style = "text-align:center;", if (eligible) checkboxInput(sid, NULL, value = isTRUE(input[[sid]])) else tags$input(type = "checkbox", disabled = "disabled")),
-        tags$td(style = "text-align:right; font-size:15px;", sprintf("%.1f", ev_stat["mean"]))
+        tags$td(style = "text-align:right; font-size:14px;", format_trade_pct(convey_prob)),
+        tags$td(style = "text-align:right; font-size:14px;", sprintf("%.1f", initial_stat["mean"])),
+        tags$td(style = "text-align:right; font-size:14px;", sprintf("%.1f", impact_stat["mean"])),
+        tags$td(style = "text-align:right; font-size:14px;", sprintf("%.1f", final_stat["mean"]))
       )
     })
 
@@ -5133,27 +5891,38 @@ server <- function(input, output, session) {
           tags$td(style = "height:74px; padding:6px 0; border-bottom:0;", HTML("&nbsp;")),
           tags$td(style = "height:74px; padding:6px 0; border-bottom:0;", HTML("&nbsp;")),
           tags$td(style = "height:74px; padding:6px 0; border-bottom:0;", HTML("&nbsp;")),
+          tags$td(style = "height:74px; padding:6px 0; border-bottom:0;", HTML("&nbsp;")),
+          tags$td(style = "height:74px; padding:6px 0; border-bottom:0;", HTML("&nbsp;")),
+          tags$td(style = "height:74px; padding:6px 0; border-bottom:0;", HTML("&nbsp;")),
           tags$td(style = "height:74px; padding:6px 0; border-bottom:0;", HTML("&nbsp;"))
         )
       })
       body_rows <- c(body_rows, spacer_rows)
     }
 
-    total_ev <- trade_pick_stats(side_out_ev_value(ids, side, receiver))
+    total_initial <- trade_pick_stats(side_initial_ev_value(ids, side, receiver))
+    total_impact  <- trade_pick_stats(side_epv_impact_value(ids, side, receiver))
+    total_final   <- trade_pick_stats(side_out_ev_value(ids, side, receiver))
 
     tags$div(class = "tm-pick-table",
       tags$table(
         tags$colgroup(
-          tags$col(style = "width:50%;"),
-          tags$col(style = "width:22%;"),
-          tags$col(style = "width:14%;"),
-          tags$col(style = "width:14%;")
+          tags$col(style = "width:27%;"),
+          tags$col(style = "width:20%;"),
+          tags$col(style = "width:8%;"),
+          tags$col(style = "width:12%;"),
+          tags$col(style = "width:10%;"),
+          tags$col(style = "width:13%;"),
+          tags$col(style = "width:10%;")
         ),
         tags$thead(tags$tr(
           tags$th(style = "text-align:left;", "Picks"),
-          tags$th(style = "text-align:left;", "Protection"),
-          tags$th(style = "text-align:center;", "Swap Rights"),
-          tags$th(style = "text-align:right;", "EPV")
+          tags$th(style = "text-align:left;", HTML("Protection")),
+          tags$th(style = "text-align:center;", HTML("Swap<br>Right")),
+          tags$th(style = "text-align:right;", HTML(sub("^Convey to ", "Convey<br>to&nbsp;", convey_header))),
+          tags$th(style = "text-align:right;", HTML("Initial<br>EPV")),
+          tags$th(style = "text-align:right;", HTML("Impact<br>EPV")),
+          tags$th(style = "text-align:right;", HTML("Final<br>EPV"))
         )),
         tags$tbody(
           body_rows,
@@ -5161,7 +5930,10 @@ server <- function(input, output, session) {
             tags$td("Total"),
             tags$td(""),
             tags$td(""),
-            tags$td(style = "text-align:right; font-size:15px;", sprintf("%.1f", total_ev["mean"]))
+            tags$td(""),
+            tags$td(style = "text-align:right; font-size:14px;", sprintf("%.1f", total_initial["mean"])),
+            tags$td(style = "text-align:right; font-size:14px;", sprintf("%.1f", total_impact["mean"])),
+            tags$td(style = "text-align:right; font-size:14px;", sprintf("%.1f", total_final["mean"]))
           )
         )
       )
@@ -5286,9 +6058,9 @@ server <- function(input, output, session) {
 
     prob_card <- function(label, p, col, border_col = col) {
       tags$div(style = sprintf(
-        "flex:1; min-width:0; padding:11px 13px; border:1px solid %s; border-radius:8px; border-left:3px solid %s;", border_col, col),
+        "flex:1 1 0; min-width:0; height:84px; box-sizing:border-box; padding:10px 13px; border:1px solid %s; border-radius:8px; border-left:3px solid %s; display:flex; flex-direction:column; justify-content:center;", border_col, col),
         tags$div(style = "font-size:11px; color:#888; white-space:nowrap;", label),
-        tags$div(style = sprintf("font-size:23px; font-weight:850; color:%s;", col), sprintf("%.1f%%", 100 * p))
+        tags$div(style = sprintf("font-size:23px; line-height:1.1; font-weight:850; color:%s;", col), sprintf("%.1f%%", 100 * p))
       )
     }
 
@@ -5317,7 +6089,7 @@ server <- function(input, output, session) {
     metric_block <- function(metric_card, prob_left, prob_right, description) {
       tags$div(style = "display:flex; flex-direction:column; gap:8px; min-width:0; height:100%; align-self:stretch;",
         metric_card,
-        tags$div(style = "display:flex; gap:8px; align-items:stretch; min-width:0; flex:1;",
+        tags$div(style = "display:flex; gap:8px; align-items:stretch; min-width:0; height:84px; flex:0 0 84px;",
           prob_left,
           prob_right
         ),

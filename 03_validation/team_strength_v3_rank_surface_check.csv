@@ -1,0 +1,2 @@
+max_row_sum_error,mean_abs_adjacent_row_diff,mean_abs_adjacent_col_diff,mean_diagonal_probability,mean_abs_tier_diff_vs_empirical,max_abs_tier_diff_vs_empirical
+8.192500011716675e-9,0.003212689443887931,0.003378795098466954,0.07991733038208333,0.040985266033363194,0.13281430707760677

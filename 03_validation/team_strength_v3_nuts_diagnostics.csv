@@ -1,0 +1,5 @@
+model,.chain,n_draws,divergences,pct_divergent,max_treedepth_hits,pct_max_treedepth,max_treedepth_observed,mean_accept_stat,min_accept_stat,mean_stepsize,max_n_leapfrog,ebfmi,flag_divergences,flag_treedepth,flag_ebfmi
+team_strength_v3,1,2000,0,0,0,0,5,0.950540044,0.736677,0.111789,31,0.9857225889693639,FALSE,FALSE,FALSE
+team_strength_v3,2,2000,0,0,0,0,5,0.956573403,0.771301,0.104278,31,1.0958283709696173,FALSE,FALSE,FALSE
+team_strength_v3,3,2000,0,0,0,0,5,0.9377959095,0.694606,0.124034,63,1.0348588611520748,FALSE,FALSE,FALSE
+team_strength_v3,4,2000,0,0,0,0,6,0.926478966,0.620796,0.134235,127,1.020690589541948,FALSE,FALSE,FALSE

@@ -70,19 +70,60 @@ sim_321_lottery <- function() {
 
 
 # ============================================================================
-# SECTION 11: TIER -> SEEDS, AND THE NEW ANTI-TANK PICK RESTRICTIONS
+# SECTION 11: RANK -> SEEDS, AND THE NEW ANTI-TANK PICK RESTRICTIONS
 # ============================================================================
-# Within a simulated season, teams are assigned to tiers by the Markov chain.
-# We then need a worst-to-best ordering to seed the lottery. We order teams
-# first by tier (relegation worst) then randomly within tier (a within-tier
-# record proxy), giving the 16 non-playoff seeds and the 14 playoff slots.
+# The production team-strength model now simulates a full 30-team standings /
+# draft-rank state. Rank convention:
+#   rank_worst = 1  -> worst record / old lottery seed 1
+#   rank_worst = 30 -> best record / pick 30 by inverse record
+#
+# Each team first draws a desired future rank from the smoothed 30-rank Markov
+# transition surface. Because independent categorical draws can duplicate a
+# slot or leave a slot empty, resolve_rank_slots() turns those desired ranks
+# into a valid one-team-per-rank permutation by sorting desired rank and using a
+# random tiebreaker. This is equivalent to breaking ties at the duplicated slot
+# and shifting every lower-priority team down into the next available slot.
 
-order_teams_for_draft <- function(team_tiers) {
-  tier_rank <- match(team_tiers, TIERS)            # 1 = relegation = worst
-  jitter    <- runif(length(team_tiers))           # within-tier record proxy
-  ord <- order(tier_rank, jitter)                  # worst -> best
-  all_teams_local <- names(team_tiers)
-  all_teams_local[ord]
+rank_to_tier_from_worst <- function(rank_worst) {
+  rank_worst <- as.integer(rank_worst)
+  dplyr::case_when(
+    rank_worst <= 3L  ~ "relegation",
+    rank_worst <= 10L ~ "nonplayin",
+    rank_worst <= 14L ~ "playin_seed",
+    rank_worst <= 16L ~ "playin_loser",
+    TRUE              ~ "playoff"
+  )
+}
+
+resolve_rank_slots <- function(desired_rank, teams = names(desired_rank)) {
+  desired_rank <- as.integer(desired_rank)
+  desired_rank <- pmin(pmax(desired_rank, 1L), 30L)
+  if (is.null(teams) || length(teams) != length(desired_rank)) {
+    teams <- all_teams[seq_along(desired_rank)]
+  }
+
+  resolved <- tibble(
+    team = teams,
+    desired_rank = desired_rank,
+    tie_break = runif(length(desired_rank))
+  ) %>%
+    arrange(.data$desired_rank, .data$tie_break) %>%
+    mutate(rank_worst = row_number())
+
+  setNames(as.integer(resolved$rank_worst), resolved$team)
+}
+
+simulate_next_rank_state <- function(current_rank_worst, P_rank) {
+  desired <- vapply(all_teams, function(tm) {
+    i <- as.integer(current_rank_worst[tm])
+    if (is.na(i) || i < 1L || i > nrow(P_rank)) i <- sample(seq_len(nrow(P_rank)), 1)
+    sample(seq_len(nrow(P_rank)), 1, prob = P_rank[i, ])
+  }, integer(1))
+
+  names(desired) <- all_teams
+  rank_worst <- resolve_rank_slots(desired, all_teams)
+  ord <- names(rank_worst)[order(rank_worst)]
+  list(rank_worst = rank_worst, ord = ord, desired_rank = desired)
 }
 
 # Apply the approved restrictions to the full ORIGINAL-team slot permutation,
@@ -709,14 +750,20 @@ value_allocated_future_assets <- function(sim, yr, draft_round, slots, owner_by_
 # For each simulation:
 #   * 2026 is FIXED to the actual draft order (both systems identical) so its
 #     values are not random — only 2027-2032 are projected.
-#   * Draw one Markov transition matrix and one pick-value posterior index.
-#   * Initialize each team's tier from 2025-26, then evolve year by year.
-#   * Each year, seed BOTH lotteries (current vs 3-2-1), resolve swaps, apply
-#     protections and the new pick restrictions, and value every owned pick.
+#   * Draw one 30-rank Markov transition matrix and one pick-value posterior index.
+#   * Initialize each team's exact rank_worst state from 2025-26, then evolve
+#     year by year.
+#   * Each year, seed BOTH lotteries from the same simulated full standings
+#     permutation, resolve swaps, apply protections and the new pick restrictions,
+#     and value every owned pick.
 #
-# Seeding 2026 baseline tiers from the final 2025-26 standings:
-current_tiers0 <- setNames(as.character(current_standings$tier),
-                           current_standings$abbr)
+# Seeding 2026 baseline rank states from the final 2025-26 standings:
+if (!exists("current_rank_worst0")) {
+  current_rank_worst0 <- setNames(
+    as.integer(max(current_standings$overall_rank, na.rm = TRUE) + 1L - current_standings$overall_rank),
+    current_standings$abbr
+  )
+}
 
 # Pre-compute the actual 2026 slot value contribution per owner (sampled each
 # sim so 2026 still carries pick-value uncertainty, just not lottery
@@ -780,6 +827,8 @@ team_slot2_cur <- array(NA_real_, dim = c(N_SIMS, 30, n_proj_years),
                         dimnames = list(NULL, all_teams, as.character(proj_years)))
 team_slot2_new <- array(NA_real_, dim = c(N_SIMS, 30, n_proj_years),
                         dimnames = list(NULL, all_teams, as.character(proj_years)))
+team_rank_worst <- array(NA_real_, dim = c(N_SIMS, 30, n_proj_years),
+                         dimnames = list(NULL, all_teams, as.character(proj_years)))
 sim_curve_par_cols <- c(
   "alpha", "beta", "gamma", "tau_log_sigma_rw", "nu",
   "eta_31_r2", "tau_pi_r2",
@@ -823,8 +872,8 @@ for (sim in 1:N_SIMS) {
     as.numeric(pick2_cond_mu_draws[d_pick2, ])
   )
   
-  # transition matrix for this sim
-  P <- t(vapply(1:N_TIERS, function(i) get_theta_row(d_mk, i), numeric(N_TIERS)))
+  # rank-transition matrix for this sim (rows = current rank_worst, cols = next rank_worst)
+  P <- t(vapply(seq_len(N_RANKS), function(i) get_theta_row(d_mk, i), numeric(N_RANKS)))
   
   # accumulators
   tv_c <- setNames(rep(0, 30), all_teams); tv_n <- tv_c
@@ -863,20 +912,17 @@ for (sim in 1:N_SIMS) {
   top_hist[["DAL"]]$no1  <- c(top_hist[["DAL"]]$no1, 2025)
   top_hist[["DAL"]]$top5 <- c(top_hist[["DAL"]]$top5, 2025)
   
-  team_tiers <- current_tiers0
+  team_rank_state <- current_rank_worst0
   obligation_state_c <- normalize_obligation_state()
   obligation_state_n <- normalize_obligation_state()
   
   for (yr in FIRST_PROJECTED_DRAFT:LAST_PROJECTED_DRAFT) {
-    # evolve tiers one year via the Markov chain
-    for (tm in all_teams) {
-      i <- match(team_tiers[tm], TIERS)
-      team_tiers[tm] <- TIERS[sample(N_TIERS, 1, prob = P[i, ])]
-    }
-    
-    # worst -> best ordering for seeding
-    ord <- order_teams_for_draft(team_tiers)
-    rank_of <- setNames(seq_along(ord), ord)        # 1 = worst overall
+    # Evolve exact standings / draft ranks one year via the smoothed 30-rank
+    # Markov transition surface, then resolve duplicates into a permutation.
+    rank_step <- simulate_next_rank_state(team_rank_state, P)
+    team_rank_state <- rank_step$rank_worst
+    ord <- rank_step$ord                                  # worst -> best
+    rank_of <- setNames(seq_along(ord), ord)              # 1 = worst overall
     
     # ---- CURRENT system seats (14-team lottery) ----
     lot14 <- ord[1:14]
@@ -915,6 +961,7 @@ for (sim in 1:N_SIMS) {
       if (!is.na(slot_n[tm])) team_slot_new[sim, tm, yc] <- slot_n[tm]
       if (!is.na(slot2_c[tm])) team_slot2_cur[sim, tm, yc] <- slot2_c[tm]
       if (!is.na(slot2_n[tm])) team_slot2_new[sim, tm, yc] <- slot2_n[tm]
+      if (!is.na(rank_of[tm])) team_rank_worst[sim, tm, yc] <- rank_of[tm]
     }
     
     # ---- resolve all simple + complex ownership obligations -----------------
@@ -1028,6 +1075,35 @@ validate_round_aware_outputs <- function() {
   }
   if (inv_bad > 0) stop("3-2-1 second-round inversion validation failed.", call. = FALSE)
   
+  # Every projected sim-year must contain exactly one team in each of the 30
+  # rank slots. This guards against duplicate/gap errors after categorical rank
+  # draws are resolved into a standings permutation.
+  rank_bad <- 0L
+  old_nonlot_bad <- 0L
+  new_nonlot_bad <- 0L
+  for (yr in as.character(proj_years)) {
+    rk <- team_rank_worst[, , yr]
+    sc <- team_slot_cur[, , yr]
+    sn <- team_slot_new[, , yr]
+    for (rr in seq_len(nrow(rk))) {
+      if (!identical(sort(as.integer(rk[rr, ])), 1:30)) rank_bad <- rank_bad + 1L
+
+      # Old/current system: non-lottery teams receive picks 15-30 by inverse
+      # record, so simulated rank_worst 15 maps to pick 15 and rank_worst 30
+      # maps to pick 30.
+      old_idx <- which(rk[rr, ] >= 15)
+      old_nonlot_bad <- old_nonlot_bad + sum(sc[rr, old_idx] != rk[rr, old_idx], na.rm = TRUE)
+
+      # 3-2-1 system: ranks 17-30 are non-lottery and keep inverse-record
+      # slots 17-30 after the 16-team lottery is drawn.
+      new_idx <- which(rk[rr, ] >= 17)
+      new_nonlot_bad <- new_nonlot_bad + sum(sn[rr, new_idx] != rk[rr, new_idx], na.rm = TRUE)
+    }
+  }
+  if (rank_bad > 0) stop("Rank-state validation failed: at least one sim-year is not a 1:30 permutation.", call. = FALSE)
+  if (old_nonlot_bad > 0) stop("Old-system non-lottery inverse-record validation failed.", call. = FALSE)
+  if (new_nonlot_bad > 0) stop("3-2-1 non-lottery inverse-record validation failed.", call. = FALSE)
+
   if (any(is.na(pick_assets$round)) || any(!pick_assets$round %in% c(1L, 2L))) {
     stop("pick_assets has missing or invalid round values.", call. = FALSE)
   }
@@ -1288,6 +1364,7 @@ team_slot_cur_draws     <- team_slot_cur[keep_idx, , , drop = FALSE]
 team_slot_new_draws     <- team_slot_new[keep_idx, , , drop = FALSE]
 team_slot2_cur_draws    <- team_slot2_cur[keep_idx, , , drop = FALSE]
 team_slot2_new_draws    <- team_slot2_new[keep_idx, , , drop = FALSE]
+team_rank_worst_draws   <- team_rank_worst[keep_idx, , , drop = FALSE]
 sim_curve_par_draws     <- sim_curve_par[keep_idx, , drop = FALSE]
 
 display_asset_cur_draws <- build_display_draw_matrix(asset_cur_draws, pick_display_members, pick_display_assets)
@@ -1601,11 +1678,15 @@ stan_diagnostics <- list(
     curve_type = "Bayesian second-round right-skew hurdle: adjacent-pick P(play), shifted-lognormal played outcomes, and pick-declining rare-upside component"
   ),
   markov_model = list(
-    n_transitions = sum(counts_mat),
+    state_type    = "30-rank smoothed softmax",
+    n_transitions = sum(rank_counts_mat),
     n_seasons     = n_distinct(all_standings$season),
     lambda2       = round(mc_diag$lambda2, 3),
     mixing_time   = round(mc_diag$mixing_time, 1),
-    max_abs_diff  = round(max(abs(post_trans - posterior_mean_closed)), 4)
+    tier_lambda2  = round(mc_diag_tier$lambda2, 3),
+    tier_mixing_time = round(mc_diag_tier$mixing_time, 1),
+    row_sum_error = round(max(abs(rowSums(post_rank_trans) - 1)), 8),
+    rank_surface_smoothness = rank_transition_smoothness
   )
 )
 
@@ -1616,9 +1697,15 @@ dashboard_data <- list(
   lottery_tier_validation = lottery_tier_validation,
   official_321_tier_odds = official_321_tier_odds,
   pick_curve        = pick_curve,
-  transition_matrix = post_trans,
-  transition_counts = counts_mat,
-  stationary        = setNames(as.numeric(mc_diag$stationary), TIERS),
+  # Backward-compatible tier transition display, derived from the production
+  # 30-rank model. Full rank-state objects are exported below.
+  transition_matrix = post_tier_trans,
+  transition_counts = tier_counts_mat,
+  stationary        = setNames(as.numeric(mc_diag_tier$stationary), TIERS),
+  rank_transition_matrix = post_rank_trans,
+  rank_transition_counts = rank_counts_mat,
+  rank_stationary        = setNames(as.numeric(mc_diag$stationary), RANK_STATE_LABELS),
+  team_rank_worst_draws  = team_rank_worst_draws,
   tier_balls        = TIER_BALLS,
   tier_sizes        = TIER_SIZES,
   actual_2026       = bind_rows(actual_2026_order, actual_2026_second_order),
@@ -1674,8 +1761,9 @@ dashboard_data <- list(
     draft_years = sprintf("2026 actual + %d-%d projected",
                           FIRST_PROJECTED_DRAFT, LAST_PROJECTED_DRAFT),
     system_note = "2026 actual results; 3-2-1 effective 2027-2029",
-    model_note  = "Bayesian 5-tier Markov chain + round-1 Student-t pick curve + round-2 declining-upside right-skew hurdle pick curve",
+    model_note  = "Bayesian 30-rank smoothed-softmax Markov chain + round-1 Student-t pick curve + round-2 declining-upside right-skew hurdle pick curve",
     tiers       = TIERS,
+    markov_state_type = "rank_worst_1_to_30",
     n_picks     = nrow(owned_future) + nrow(actual_2026_order) + nrow(actual_2026_second_order),
     round_validation_passed = round_validation_passed,
     timestamp   = Sys.time()

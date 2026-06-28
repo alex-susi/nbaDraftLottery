@@ -3,19 +3,19 @@
 #
 # Standalone validation script for the current three Stan models used by the
 # NBA 3-2-1 Lottery Reform project:
-#   1. pick_value_v3.stan                       -> pick_fit / pick_fit_rw_sigma
-#   2. pick_play_r2_v6_declining_upside.stan    -> pick_fit_r2_hurdle
-#   3. team_strength.stan                       -> markov_fit
+#   1. picks_Round1.stan                      -> pick_fit / pick_fit_rw_sigma
+#   2. picks_Round2.stan                      -> pick_fit_r2_hurdle
+#   3. team_strength_v3.stan                    -> markov_fit / rank Markov fit
 #
 # Run options:
 #   A) Recommended during development:
 #        source("01_data.R")
 #        source("02_picks.R")
-#        source("03_models.R")
-#        source("stan_model_validation_latest_models.R")
+#        source("03_models_rank_v3.R")
+#        source("05_model_validation_rank_v3.R")
 #
 #   B) Standalone from the same project directory:
-#        Rscript stan_model_validation_latest_models.R
+#        Rscript 05_model_validation_rank_v3.R
 #      If the fit objects are not already in memory, this script can source the
 #      project pipeline scripts. That will rerun scraping / fitting work.
 #
@@ -31,21 +31,24 @@ PROJECT_DIR <- getwd()
 
 # Prefer the current modular pipeline. Keep a legacy nba_lottery.R fallback for
 # older local project layouts.
-PIPELINE_SCRIPTS <- file.path(PROJECT_DIR, c("01_data.R", "02_picks.R", "03_models.R"))
+PIPELINE_SCRIPTS <- file.path(PROJECT_DIR, c("01_data.R", "02_picks.R", "03_models_rank_v3.R"))
+if (!all(file.exists(PIPELINE_SCRIPTS))) {
+  PIPELINE_SCRIPTS <- file.path(PROJECT_DIR, c("01_data.R", "02_picks.R", "03_models.R"))
+}
 NBA_LOTTERY_SCRIPT <- file.path(PROJECT_DIR, "nba_lottery.R")
 
 # Latest Stan models.
 PICK_MODEL_R1_PATH <- c(
-  file.path(PROJECT_DIR, "02_models", "pick_value_v3.stan"),
-  file.path(PROJECT_DIR, "pick_value_v3.stan")
+  file.path(PROJECT_DIR, "02_models", "picks_Round1.stan"),
+  file.path(PROJECT_DIR, "picks_Round1.stan")
 )
 PICK_MODEL_R2_PATH <- c(
-  file.path(PROJECT_DIR, "02_models", "pick_play_r2_v6_declining_upside.stan"),
-  file.path(PROJECT_DIR, "pick_play_r2_v6_declining_upside.stan")
+  file.path(PROJECT_DIR, "02_models", "picks_Round2.stan"),
+  file.path(PROJECT_DIR, "picks_Round2.stan")
 )
 TEAM_STRENGTH_MODEL_PATH <- c(
-  file.path(PROJECT_DIR, "02_models", "team_strength.stan"),
-  file.path(PROJECT_DIR, "team_strength.stan")
+  file.path(PROJECT_DIR, "02_models", "team_strength_v3.stan"),
+  file.path(PROJECT_DIR, "team_strength_v3.stan")
 )
 
 OUT_DIR <- file.path(PROJECT_DIR, "03_validation")
@@ -56,7 +59,7 @@ RUN_PIPELINE_IF_NEEDED <- TRUE
 # heaviest because it refits the hurdle/lognormal-mixture model.
 RUN_SBC_PICK_R1   <- TRUE
 RUN_SBC_PICK_R2   <- FALSE
-RUN_SBC_MARKOV    <- TRUE
+RUN_SBC_MARKOV    <- FALSE  # v2 uses a smoothed softmax surface; use rank calibration checks below by default
 SBC_REPS_PICK_R1  <- 50L
 SBC_REPS_PICK_R2  <- 25L
 SBC_REPS_MARKOV   <- 100L
@@ -199,7 +202,7 @@ ensure_yrep_matrix <- function(yrep, y, name = "yrep") {
 needed_objects <- c(
   "pick_fit", "pick_fit_r2_hurdle", "markov_fit",
   "pick_fit_data", "pick_fit_data_r2",
-  "counts_mat", "alpha_prior", "N_TIERS", "TIERS", "posterior_mean_closed"
+  "rank_counts_mat", "N_RANKS", "RANK_STATE_LABELS", "TIERS", "tier_counts_mat", "rank_transitions", "all_standings"
 )
 
 have_needed <- function() all(vapply(needed_objects, exists, logical(1), envir = .GlobalEnv))
@@ -243,11 +246,16 @@ markov_fit <- get("markov_fit", envir = .GlobalEnv)
 
 pick_fit_data <- get("pick_fit_data", envir = .GlobalEnv)
 pick_fit_data_r2 <- get("pick_fit_data_r2", envir = .GlobalEnv)
-counts_mat <- get("counts_mat", envir = .GlobalEnv)
-alpha_prior <- get("alpha_prior", envir = .GlobalEnv)
-N_TIERS <- get("N_TIERS", envir = .GlobalEnv)
+rank_counts_mat <- get("rank_counts_mat", envir = .GlobalEnv)
+N_RANKS <- get("N_RANKS", envir = .GlobalEnv)
+RANK_STATE_LABELS <- get("RANK_STATE_LABELS", envir = .GlobalEnv)
 TIERS <- get("TIERS", envir = .GlobalEnv)
-posterior_mean_closed <- get("posterior_mean_closed", envir = .GlobalEnv)
+tier_counts_mat <- get("tier_counts_mat", envir = .GlobalEnv)
+rank_transitions <- get("rank_transitions", envir = .GlobalEnv)
+all_standings <- get("all_standings", envir = .GlobalEnv)
+if (exists("post_rank_trans", envir = .GlobalEnv)) post_rank_trans <- get("post_rank_trans", envir = .GlobalEnv)
+if (exists("post_tier_trans", envir = .GlobalEnv)) post_tier_trans <- get("post_tier_trans", envir = .GlobalEnv)
+if (exists("rank_transition_smoothness", envir = .GlobalEnv)) rank_transition_smoothness <- get("rank_transition_smoothness", envir = .GlobalEnv)
 
 # Stan data. Rebuild from the validation data to avoid stale long-session objects.
 pick_stan_data_r1 <- list(
@@ -300,8 +308,9 @@ message_section("Validation inputs")
 cat("Round-1 pick model observations:", pick_stan_data_r1$N, "\n")
 cat("Round-2 pick model observations:", pick_stan_data_r2$N, "\n")
 cat("Round-2 WS floor:", pick_stan_data_r2$ws_floor, "\n")
-cat("Markov states:", N_TIERS, "\n")
-cat("Observed transition count total:", sum(counts_mat), "\n")
+cat("Rank Markov states:", N_RANKS, "\n")
+cat("Observed rank transition count total:", sum(rank_counts_mat), "\n")
+cat("Five-tier benchmark transition count total:", sum(tier_counts_mat), "\n")
 cat("Output directory:", OUT_DIR, "\n")
 
 # ==============================================================================
@@ -400,9 +409,9 @@ plot_mcmc_core <- function(fit, model_name, variables) {
 message_section("Core MCMC diagnostics")
 
 pick_core_vars_r1 <- c("alpha", "beta", "gamma", "log_sigma_1", "tau_log_sigma_rw", "nu")
-pick_param_summary_r1 <- summarize_mcmc_parameters(pick_fit, "pick_value_v3_r1", pick_core_vars_r1)
-pick_nuts_r1 <- summarize_nuts(pick_fit, "pick_value_v3_r1")
-plot_mcmc_core(pick_fit, "pick_value_v3_r1", pick_core_vars_r1)
+pick_param_summary_r1 <- summarize_mcmc_parameters(pick_fit, "picks_Round1.stan", pick_core_vars_r1)
+pick_nuts_r1 <- summarize_nuts(pick_fit, "picks_Round1.stan")
+plot_mcmc_core(pick_fit, "picks_Round1.stan", pick_core_vars_r1)
 
 pick_core_vars_r2 <- c(
   "logit_play_31", "delta_logit_play", "tau_logit_play_rw",
@@ -412,14 +421,16 @@ pick_core_vars_r2 <- c(
   "upside_prob_31", "upside_prob_45", "upside_prob_60",
   "upside_log_shift", "upside_sigma_mult"
 )
-pick_param_summary_r2 <- summarize_mcmc_parameters(pick_fit_r2_hurdle, "pick_play_r2_v6_declining_upside", pick_core_vars_r2)
-pick_nuts_r2 <- summarize_nuts(pick_fit_r2_hurdle, "pick_play_r2_v6_declining_upside")
-plot_mcmc_core(pick_fit_r2_hurdle, "pick_play_r2_v6_declining_upside", pick_core_vars_r2)
+pick_param_summary_r2 <- summarize_mcmc_parameters(pick_fit_r2_hurdle, "picks_Round2.stan", pick_core_vars_r2)
+pick_nuts_r2 <- summarize_nuts(pick_fit_r2_hurdle, "picks_Round2.stan")
+plot_mcmc_core(pick_fit_r2_hurdle, "picks_Round2.stan", pick_core_vars_r2)
 
-markov_param_summary <- summarize_mcmc_parameters(markov_fit, "team_strength")
-markov_nuts <- summarize_nuts(markov_fit, "team_strength")
-markov_plot_vars <- c("theta[1,1]", "theta[1,2]", "theta[2,2]", "theta[3,3]", "theta[4,4]", "theta[5,5]")
-plot_mcmc_core(markov_fit, "team_strength", markov_plot_vars)
+markov_core_vars <- c("distance_slope", "sigma_eta", "sigma_row", "sigma_col",
+                      "theta[1,1]", "theta[1,2]", "theta[10,10]",
+                      "theta[16,17]", "theta[30,30]")
+markov_param_summary <- summarize_mcmc_parameters(markov_fit, "team_strength_v3", existing_stan_vars(markov_fit, markov_core_vars))
+markov_nuts <- summarize_nuts(markov_fit, "team_strength_v3")
+plot_mcmc_core(markov_fit, "team_strength_v3", existing_stan_vars(markov_fit, markov_core_vars))
 
 all_param_summary <- bind_rows(pick_param_summary_r1, pick_param_summary_r2, markov_param_summary)
 all_nuts <- bind_rows(pick_nuts_r1, pick_nuts_r2, markov_nuts)
@@ -523,19 +534,19 @@ p_pick_r1_intervals <- bayesplot::ppc_intervals(
     x = "Draft pick",
     y = "First-4-year win shares"
   )
-save_plot_safe(p_pick_r1_intervals, file.path(OUT_DIR, "pick_value_v3_r1_ppc_intervals.png"), width = 10, height = 6)
+save_plot_safe(p_pick_r1_intervals, file.path(OUT_DIR, "picks_Round1.stan_ppc_intervals.png"), width = 10, height = 6)
 
 p_pick_r1_dens <- bayesplot::ppc_dens_overlay(war_obs_r1, yrep_r1[seq_len(min(50, nrow(yrep_r1))), , drop = FALSE]) +
   ggplot2::labs(title = "Round-1 pick_value_v3 PPC: player-level distribution overlay")
-save_plot_safe(p_pick_r1_dens, file.path(OUT_DIR, "pick_value_v3_r1_ppc_density.png"), width = 10, height = 6)
+save_plot_safe(p_pick_r1_dens, file.path(OUT_DIR, "picks_Round1.stan_ppc_density.png"), width = 10, height = 6)
 
 p_pick_r1_stat_mean <- bayesplot::ppc_stat(war_obs_r1, yrep_r1, stat = "mean") +
   ggplot2::labs(title = "Round-1 pick_value_v3 PPC: player-level mean")
-save_plot_safe(p_pick_r1_stat_mean, file.path(OUT_DIR, "pick_value_v3_r1_ppc_mean.png"), width = 8, height = 5)
+save_plot_safe(p_pick_r1_stat_mean, file.path(OUT_DIR, "picks_Round1.stan_ppc_mean.png"), width = 8, height = 5)
 
 p_pick_r1_stat_sd <- bayesplot::ppc_stat(war_obs_r1, yrep_r1, stat = "sd") +
   ggplot2::labs(title = "Round-1 pick_value_v3 PPC: player-level standard deviation")
-save_plot_safe(p_pick_r1_stat_sd, file.path(OUT_DIR, "pick_value_v3_r1_ppc_sd.png"), width = 8, height = 5)
+save_plot_safe(p_pick_r1_stat_sd, file.path(OUT_DIR, "picks_Round1.stan_ppc_sd.png"), width = 8, height = 5)
 
 pick_ppc_summary_r1 <- tibble(
   row_id = seq_along(war_obs_r1),
@@ -554,7 +565,7 @@ if (nrow(pick_fit_data) == nrow(pick_ppc_summary_r1)) {
     bind_cols(pick_fit_data %>% select(any_of(c("draft_year", "player"))))
 }
 
-write_csv_safe(pick_ppc_summary_r1, file.path(OUT_DIR, "pick_value_v3_r1_ppc_summary.csv"))
+write_csv_safe(pick_ppc_summary_r1, file.path(OUT_DIR, "picks_Round1.stan_ppc_summary.csv"))
 
 pick_ppc_by_pick_r1 <- pick_ppc_summary_r1 %>%
   group_by(pick) %>%
@@ -566,7 +577,7 @@ pick_ppc_by_pick_r1 <- pick_ppc_summary_r1 %>%
     mean_z_resid = mean(z_resid, na.rm = TRUE),
     .groups = "drop"
   )
-write_csv_safe(pick_ppc_by_pick_r1, file.path(OUT_DIR, "pick_value_v3_r1_ppc_by_pick.csv"))
+write_csv_safe(pick_ppc_by_pick_r1, file.path(OUT_DIR, "picks_Round1.stan_ppc_by_pick.csv"))
 
 cat(sprintf("Round-1 pick_value_v3 90%% PPC coverage: %.1f%% of player rows\n", 100 * mean(pick_ppc_summary_r1$covered_90)))
 cat(sprintf("Round-1 pick_value_v3 max |PPC z residual|: %.2f\n", max(abs(pick_ppc_summary_r1$z_resid), na.rm = TRUE)))
@@ -587,7 +598,7 @@ pick2_existing_gq_matches_data <- function(fit, n_obs) {
 if (!pick2_existing_gq_matches_data(pick_fit_r2_hurdle, length(pick_stan_data_r2$ws4))) {
   stop(
     "pick_fit_r2_hurdle lacks matching generated quantities. Refit ",
-    "pick_play_r2_v6_declining_upside.stan with generated quantities enabled.",
+    "picks_Round2.stan with generated quantities enabled.",
     call. = FALSE
   )
 }
@@ -730,14 +741,14 @@ markov_ppc_stats <- function(counts_array, model_name = "rep") {
   )
 }
 
-theta_arr <- extract_theta_array(markov_fit, N_TIERS)
-counts_rep <- simulate_markov_counts(theta_arr, rowSums(counts_mat), n_draws = 1000L)
-counts_obs_array <- array(counts_mat, dim = c(1, N_TIERS, N_TIERS))
+theta_arr <- extract_theta_array(markov_fit, N_RANKS)
+counts_rep <- simulate_markov_counts(theta_arr, rowSums(rank_counts_mat), n_draws = 1000L)
+counts_obs_array <- array(rank_counts_mat, dim = c(1, N_RANKS, N_RANKS))
 
 markov_ppc_rep <- markov_ppc_stats(counts_rep, "rep")
 markov_ppc_obs <- markov_ppc_stats(counts_obs_array, "obs") %>% select(-draw, -model)
-write_csv_safe(markov_ppc_rep, file.path(OUT_DIR, "team_strength_ppc_replicated_stats.csv"))
-write_csv_safe(markov_ppc_obs, file.path(OUT_DIR, "team_strength_ppc_observed_stats.csv"))
+write_csv_safe(markov_ppc_rep, file.path(OUT_DIR, "team_strength_v3_rank_ppc_replicated_stats.csv"))
+write_csv_safe(markov_ppc_obs, file.path(OUT_DIR, "team_strength_v3_rank_ppc_observed_stats.csv"))
 
 plot_markov_ppc_stat <- function(stat_name) {
   obs_val <- markov_ppc_obs[[stat_name]][1]
@@ -745,7 +756,7 @@ plot_markov_ppc_stat <- function(stat_name) {
     geom_histogram(bins = 30, alpha = 0.75) +
     geom_vline(xintercept = obs_val, linewidth = 1.1, linetype = 2) +
     labs(
-      title = paste("team_strength PPC:", stat_name),
+      title = paste("team_strength_v3 rank PPC:", stat_name),
       subtitle = "Dashed line = observed transition-count statistic",
       x = stat_name,
       y = "Replicated draws"
@@ -756,34 +767,34 @@ plot_markov_ppc_stat <- function(stat_name) {
 for (stat_name in c("total_stay", "big_jumps", "max_cell", "zero_cells", "playoff_stay", "bottom_to_playoff")) {
   save_plot_safe(
     plot_markov_ppc_stat(stat_name),
-    file.path(OUT_DIR, paste0("team_strength_ppc_", stat_name, ".png")),
+    file.path(OUT_DIR, paste0("team_strength_v3_rank_ppc_", stat_name, ".png")),
     width = 8,
     height = 5
   )
 }
 
 mean_counts_rep <- apply(counts_rep, c(2, 3), mean)
-dimnames(mean_counts_rep) <- list(from = TIERS, to = TIERS)
-dimnames(counts_mat) <- list(from = TIERS, to = TIERS)
+dimnames(mean_counts_rep) <- list(from = RANK_STATE_LABELS, to = RANK_STATE_LABELS)
+dimnames(rank_counts_mat) <- list(from = RANK_STATE_LABELS, to = RANK_STATE_LABELS)
 
 heat_df <- bind_rows(
-  as.data.frame.table(counts_mat, responseName = "count") %>%
+  as.data.frame.table(rank_counts_mat, responseName = "count") %>%
     as_tibble() %>%
     transmute(from = as.character(from), to = as.character(to), count = as.numeric(count), type = "observed"),
   as.data.frame.table(mean_counts_rep, responseName = "count") %>%
     as_tibble() %>%
     transmute(from = as.character(from), to = as.character(to), count = as.numeric(count), type = "replicated_mean")
 ) %>%
-  mutate(from = factor(from, levels = TIERS), to = factor(to, levels = TIERS))
+  mutate(from = factor(from, levels = RANK_STATE_LABELS), to = factor(to, levels = RANK_STATE_LABELS))
 
 p_markov_heat <- ggplot(heat_df, aes(x = to, y = from, fill = count)) +
   geom_tile() +
   geom_text(aes(label = round(count, 1)), size = 3) +
   facet_wrap(~type) +
-  labs(title = "team_strength PPC: observed vs replicated mean transition counts", x = "To tier", y = "From tier") +
+  labs(title = "team_strength_v3 PPC: observed vs replicated mean rank-transition counts", x = "To rank", y = "From rank") +
   theme_minimal(base_size = 11) +
   theme(axis.text.x = element_text(angle = 35, hjust = 1))
-save_plot_safe(p_markov_heat, file.path(OUT_DIR, "team_strength_ppc_heatmap.png"), width = 11, height = 5.5)
+save_plot_safe(p_markov_heat, file.path(OUT_DIR, "team_strength_v3_rank_ppc_heatmap.png"), width = 12, height = 8)
 
 # ==============================================================================
 # 5. LOO / PREDICTIVE PERFORMANCE
@@ -806,7 +817,7 @@ pick_loo_r1 <- tryCatch({
 })
 
 if (!is.null(pick_loo_r1)) {
-  capture.output(print(pick_loo_r1), file = file.path(OUT_DIR, "pick_value_v3_r1_loo.txt"))
+  capture.output(print(pick_loo_r1), file = file.path(OUT_DIR, "picks_Round1.stan_loo.txt"))
   pick_pareto_r1 <- tibble(
     row_id = seq_along(pick_obs_r1),
     pick = pick_obs_r1,
@@ -816,8 +827,8 @@ if (!is.null(pick_loo_r1)) {
     pick_pareto_r1 <- pick_pareto_r1 %>%
       bind_cols(pick_fit_data %>% select(any_of(c("draft_year", "player"))))
   }
-  write_csv_safe(pick_pareto_r1, file.path(OUT_DIR, "pick_value_v3_r1_loo_pareto_k.csv"))
-  cat("Round-1 pick_value_v3 LOO written to:", file.path(OUT_DIR, "pick_value_v3_r1_loo.txt"), "\n")
+  write_csv_safe(pick_pareto_r1, file.path(OUT_DIR, "picks_Round1.stan_loo_pareto_k.csv"))
+  cat("Round-1 pick_value_v3 LOO written to:", file.path(OUT_DIR, "picks_Round1.stan_loo.txt"), "\n")
   cat(sprintf("Round-1 pick_value_v3 Pareto-k > 0.7: %d / %d\n", sum(pick_pareto_r1$flag_pareto_k), nrow(pick_pareto_r1)))
 }
 
@@ -854,45 +865,9 @@ if (!is.null(pick_loo_r2)) {
 
 # ---- 5C. Markov row-level LOO -------------------------------------------------
 
-write_markov_gq_stan <- function() {
-  "data {
-  int<lower=1> K;
-  array[K, K] int<lower=0> counts;
-  matrix<lower=0>[K, K] alpha;
-}
-parameters {
-  matrix<lower=0>[K, K] theta;
-}
-generated quantities {
-  vector[K] row_log_lik;
-  vector[K] row_entropy;
-  array[K, K] int counts_rep;
-  for (i in 1:K) {
-    vector[K] theta_i;
-    real theta_sum = 0;
-    for (j in 1:K) theta_sum += theta[i, j];
-    for (j in 1:K) theta_i[j] = theta[i, j] / theta_sum;
-    row_log_lik[i] = multinomial_lpmf(counts[i] | theta_i);
-    counts_rep[i] = multinomial_rng(theta_i, sum(counts[i]));
-    row_entropy[i] = 0;
-    for (j in 1:K) row_entropy[i] += -theta_i[j] * log(theta_i[j] + 1e-12);
-  }
-}"
-}
-
 get_or_generate_markov_gq <- function() {
   if (has_stan_variable(markov_fit, "row_log_lik")) return(markov_fit)
-  if (!GENERATE_LOG_LIK_IF_MISSING) {
-    stop("markov_fit does not contain row_log_lik; set GENERATE_LOG_LIK_IF_MISSING <- TRUE.", call. = FALSE)
-  }
-  gq_file <- file.path(OUT_DIR, "team_strength_validation_gq.stan")
-  writeLines(write_markov_gq_stan(), gq_file)
-  gq_model <- cmdstan_model(gq_file, force_recompile = TRUE)
-  gq_model$generate_quantities(
-    fitted_params = markov_fit,
-    data = list(K = N_TIERS, counts = counts_mat, alpha = alpha_prior),
-    seed = 2026
-  )
+  stop("team_strength_v3.stan must be run with generated quantities row_log_lik; refit markov_fit with the v2 Stan file.", call. = FALSE)
 }
 
 markov_gq_fit <- get_or_generate_markov_gq()
@@ -904,19 +879,19 @@ markov_loo <- tryCatch({
   r_eff <- if (!is.null(chain_id_markov)) loo::relative_eff(exp(markov_log_lik), chain_id = chain_id_markov) else NULL
   loo::loo(markov_log_lik, r_eff = r_eff)
 }, error = function(e) {
-  warning("team_strength row-level LOO failed: ", e$message)
+  warning("team_strength_v3 row-level LOO failed: ", e$message)
   NULL
 })
 
 if (!is.null(markov_loo)) {
-  capture.output(print(markov_loo), file = file.path(OUT_DIR, "team_strength_loo_row_level.txt"))
+  capture.output(print(markov_loo), file = file.path(OUT_DIR, "team_strength_v3_rank_loo_row_level.txt"))
   markov_pareto <- tibble(
-    from_tier = TIERS,
+    from_rank = RANK_STATE_LABELS,
     pareto_k = as.numeric(markov_loo$diagnostics$pareto_k)
   ) %>% mutate(flag_pareto_k = pareto_k > 0.7)
-  write_csv_safe(markov_pareto, file.path(OUT_DIR, "team_strength_loo_pareto_k.csv"))
-  cat("team_strength row-level LOO written to:", file.path(OUT_DIR, "team_strength_loo_row_level.txt"), "\n")
-  cat(sprintf("team_strength Pareto-k > 0.7: %d / %d\n", sum(markov_pareto$flag_pareto_k), nrow(markov_pareto)))
+  write_csv_safe(markov_pareto, file.path(OUT_DIR, "team_strength_v3_rank_loo_pareto_k.csv"))
+  cat("team_strength_v3 row-level LOO written to:", file.path(OUT_DIR, "team_strength_v3_rank_loo_row_level.txt"), "\n")
+  cat(sprintf("team_strength_v3 Pareto-k > 0.7: %d / %d\n", sum(markov_pareto$flag_pareto_k), nrow(markov_pareto)))
 }
 
 # ==============================================================================
@@ -925,27 +900,181 @@ if (!is.null(markov_loo)) {
 
 message_section("Model-specific checks")
 
-# ---- 6A. Markov conjugacy check ----------------------------------------------
+# ---- 6A. Rank-state transition surface and calibration checks ----------------
 
-post_trans <- matrix(NA_real_, N_TIERS, N_TIERS, dimnames = list(TIERS, TIERS))
-for (i in seq_len(N_TIERS)) {
-  for (j in seq_len(N_TIERS)) {
-    post_trans[i, j] <- mean(theta_arr[, i, j])
+post_rank_trans <- matrix(NA_real_, N_RANKS, N_RANKS,
+                          dimnames = list(from = RANK_STATE_LABELS, to = RANK_STATE_LABELS))
+for (i in seq_len(N_RANKS)) {
+  for (j in seq_len(N_RANKS)) {
+    post_rank_trans[i, j] <- mean(theta_arr[, i, j])
   }
 }
 
-markov_closed_form_check <- as_tibble(as.table(post_trans), .name_repair = "minimal") %>%
-  set_names(c("from", "to", "stan_post_mean")) %>%
-  mutate(
-    closed_form_mean = as.vector(posterior_mean_closed),
-    abs_diff = abs(stan_post_mean - closed_form_mean)
+rank_to_tier_from_worst_val <- function(rank_worst) {
+  rank_worst <- as.integer(rank_worst)
+  dplyr::case_when(
+    rank_worst <= 3L  ~ "relegation",
+    rank_worst <= 10L ~ "nonplayin",
+    rank_worst <= 14L ~ "playin_seed",
+    rank_worst <= 16L ~ "playin_loser",
+    TRUE              ~ "playoff"
   )
-write_csv_safe(markov_closed_form_check, file.path(OUT_DIR, "team_strength_closed_form_check.csv"))
+}
 
-cat(sprintf(
-  "Max abs diff between Stan transition means and closed-form Dirichlet means: %.6f\n",
-  max(markov_closed_form_check$abs_diff, na.rm = TRUE)
-))
+rank_tier_lookup_val <- tibble(
+  rank_worst = seq_len(N_RANKS),
+  tier = factor(rank_to_tier_from_worst_val(rank_worst), levels = TIERS)
+)
+
+aggregate_rank_transition_to_tier_val <- function(P_rank) {
+  out <- matrix(0, length(TIERS), length(TIERS), dimnames = list(from = TIERS, to = TIERS))
+  for (a in seq_along(TIERS)) {
+    from_ranks <- rank_tier_lookup_val$rank_worst[rank_tier_lookup_val$tier == TIERS[a]]
+    for (b in seq_along(TIERS)) {
+      to_ranks <- rank_tier_lookup_val$rank_worst[rank_tier_lookup_val$tier == TIERS[b]]
+      out[a, b] <- mean(rowSums(P_rank[from_ranks, to_ranks, drop = FALSE]))
+    }
+  }
+  out / rowSums(out)
+}
+
+post_tier_trans <- aggregate_rank_transition_to_tier_val(post_rank_trans)
+emp_tier_trans <- tier_counts_mat / rowSums(tier_counts_mat)
+
+tier_transition_check <- as_tibble(as.table(post_tier_trans), .name_repair = "minimal") %>%
+  rename(from_tier = 1, to_tier = 2, rank_model_prob = n) %>%
+  mutate(empirical_prob = as.numeric(emp_tier_trans[cbind(match(from_tier, TIERS), match(to_tier, TIERS))]),
+         abs_diff = abs(rank_model_prob - empirical_prob))
+write_csv_safe(tier_transition_check, file.path(OUT_DIR, "team_strength_v3_rank_implied_tier_transition_check.csv"))
+
+rank_surface_check <- tibble(
+  max_row_sum_error = max(abs(rowSums(post_rank_trans) - 1)),
+  mean_abs_adjacent_row_diff = mean(abs(post_rank_trans[-1, ] - post_rank_trans[-N_RANKS, ])),
+  mean_abs_adjacent_col_diff = mean(abs(post_rank_trans[, -1] - post_rank_trans[, -N_RANKS])),
+  mean_diagonal_probability = mean(diag(post_rank_trans)),
+  mean_abs_tier_diff_vs_empirical = mean(tier_transition_check$abs_diff, na.rm = TRUE),
+  max_abs_tier_diff_vs_empirical = max(tier_transition_check$abs_diff, na.rm = TRUE)
+)
+write_csv_safe(rank_surface_check, file.path(OUT_DIR, "team_strength_v3_rank_surface_check.csv"))
+
+cat("team_strength_v3 rank surface checks:\n")
+print(rank_surface_check)
+
+matrix_power_int <- function(P, h) {
+  out <- diag(nrow(P))
+  for (i in seq_len(h)) out <- out %*% P
+  out
+}
+
+rank_band_prob_tbl <- function(P_h, from_rank) {
+  tibble(
+    pred_bottom3     = rowSums(P_h[from_rank, 1:3, drop = FALSE]),
+    pred_bottom5     = rowSums(P_h[from_rank, 1:5, drop = FALSE]),
+    pred_old_lottery = rowSums(P_h[from_rank, 1:14, drop = FALSE]),
+    pred_321_lottery = rowSums(P_h[from_rank, 1:16, drop = FALSE]),
+    pred_late_first  = rowSums(P_h[from_rank, 21:30, drop = FALSE]),
+    pred_top5_record = rowSums(P_h[from_rank, 26:30, drop = FALSE])
+  )
+}
+
+rank_transition_horizon_validation <- purrr::map_dfr(1:7, function(h) {
+  obs_h <- all_standings %>%
+    arrange(abbr, season) %>%
+    group_by(abbr) %>%
+    mutate(rank_h = lead(rank_worst, h), season_h = lead(season, h)) %>%
+    ungroup() %>%
+    filter(!is.na(rank_h), season_h == season + h) %>%
+    transmute(abbr, season, from_rank = as.integer(rank_worst), to_rank = as.integer(rank_h))
+
+  P_h <- matrix_power_int(post_rank_trans, h)
+  pred_actual <- P_h[cbind(obs_h$from_rank, obs_h$to_rank)]
+  bands <- rank_band_prob_tbl(P_h, obs_h$from_rank)
+
+  bind_cols(obs_h, bands) %>%
+    summarise(
+      horizon = h,
+      n = n(),
+      mean_log_score = mean(log(pmax(pred_actual, 1e-12))),
+      mean_prob_actual_rank = mean(pred_actual),
+      brier_bottom3 = mean((pred_bottom3 - as.integer(to_rank <= 3L))^2),
+      brier_bottom5 = mean((pred_bottom5 - as.integer(to_rank <= 5L))^2),
+      brier_old_lottery = mean((pred_old_lottery - as.integer(to_rank <= 14L))^2),
+      brier_321_lottery = mean((pred_321_lottery - as.integer(to_rank <= 16L))^2),
+      brier_late_first = mean((pred_late_first - as.integer(to_rank >= 21L))^2),
+      brier_top5_record = mean((pred_top5_record - as.integer(to_rank >= 26L))^2),
+      .groups = "drop"
+    )
+})
+write_csv_safe(rank_transition_horizon_validation,
+               file.path(OUT_DIR, "team_strength_v3_rank_horizon_calibration.csv"))
+
+rank_band_calibration_1yr <- all_standings %>%
+  arrange(abbr, season) %>%
+  group_by(abbr) %>%
+  mutate(rank_next = lead(rank_worst), season_next = lead(season)) %>%
+  ungroup() %>%
+  filter(!is.na(rank_next), season_next == season + 1) %>%
+  transmute(from_rank = as.integer(rank_worst), to_rank = as.integer(rank_next)) %>%
+  bind_cols(rank_band_prob_tbl(post_rank_trans, .$from_rank)) %>%
+  summarise(
+    pred_bottom3 = mean(pred_bottom3), obs_bottom3 = mean(to_rank <= 3L),
+    pred_bottom5 = mean(pred_bottom5), obs_bottom5 = mean(to_rank <= 5L),
+    pred_old_lottery = mean(pred_old_lottery), obs_old_lottery = mean(to_rank <= 14L),
+    pred_321_lottery = mean(pred_321_lottery), obs_321_lottery = mean(to_rank <= 16L),
+    pred_late_first = mean(pred_late_first), obs_late_first = mean(to_rank >= 21L),
+    pred_top5_record = mean(pred_top5_record), obs_top5_record = mean(to_rank >= 26L),
+    .groups = "drop"
+  )
+write_csv_safe(rank_band_calibration_1yr,
+               file.path(OUT_DIR, "team_strength_v3_rank_lottery_band_calibration_1yr.csv"))
+
+build_kernel_rank_transition <- function(train_transitions, K = N_RANKS,
+                                         base = 0.02, source_bw = 1.5, dest_bw = 2.5) {
+  C <- matrix(0, K, K)
+  if (nrow(train_transitions) > 0) {
+    for (r in seq_len(nrow(train_transitions))) {
+      C[train_transitions$rank_worst[r], train_transitions$rank_next[r]] <-
+        C[train_transitions$rank_worst[r], train_transitions$rank_next[r]] + 1
+    }
+  }
+  out <- matrix(0, K, K)
+  ranks <- seq_len(K)
+  for (i in ranks) {
+    source_w <- exp(-abs(ranks - i) / source_bw)
+    source_w <- source_w / sum(source_w)
+    smoothed_counts <- as.numeric(source_w %*% C)
+    prior <- base + exp(-abs(ranks - i) / dest_bw)
+    out[i, ] <- smoothed_counts + prior
+    out[i, ] <- out[i, ] / sum(out[i, ])
+  }
+  out
+}
+
+rank_rolling_origin_validation <- purrr::map_dfr(sort(unique(rank_transitions$season_next)), function(test_season) {
+  train <- rank_transitions %>% filter(.data$season_next < .env$test_season)
+  test <- rank_transitions %>% filter(.data$season_next == .env$test_season)
+  if (nrow(train) < 30 || nrow(test) == 0) return(tibble())
+  P_train <- build_kernel_rank_transition(train)
+  pred <- P_train[cbind(test$rank_worst, test$rank_next)]
+  bands <- rank_band_prob_tbl(P_train, test$rank_worst)
+  bind_cols(test, bands) %>%
+    summarise(
+      test_season = test_season,
+      n = n(),
+      mean_log_score = mean(log(pmax(pred, 1e-12))),
+      brier_bottom3 = mean((pred_bottom3 - as.integer(rank_next <= 3L))^2),
+      brier_old_lottery = mean((pred_old_lottery - as.integer(rank_next <= 14L))^2),
+      brier_321_lottery = mean((pred_321_lottery - as.integer(rank_next <= 16L))^2),
+      .groups = "drop"
+    )
+})
+write_csv_safe(rank_rolling_origin_validation,
+               file.path(OUT_DIR, "team_strength_v3_rank_rolling_origin_validation.csv"))
+
+cat("Rank horizon calibration summary:\n")
+print(rank_transition_horizon_validation)
+cat("Rank one-year lottery-band calibration:\n")
+print(rank_band_calibration_1yr)
 
 # ---- 6B. Round-1 mean and sigma curves ----------------------------------------
 
@@ -961,7 +1090,7 @@ pick_curve_checks_r1 <- tibble(
   any_negative_mean = apply(mu_curve_r1, 1, function(x) any(x < 0)),
   pick1_minus_pick30 = mu_curve_r1[, 1] - mu_curve_r1[, 30]
 )
-write_csv_safe(pick_curve_checks_r1, file.path(OUT_DIR, "pick_value_v3_r1_curve_draw_checks.csv"))
+write_csv_safe(pick_curve_checks_r1, file.path(OUT_DIR, "picks_Round1.stan_curve_draw_checks.csv"))
 
 sigma_curve_r1 <- array_draws_matrix(pick_fit, "war_pred_sd")
 pick_sigma_curve_r1 <- tibble(
@@ -971,7 +1100,7 @@ pick_sigma_curve_r1 <- tibble(
   sigma_q50 = apply(sigma_curve_r1, 2, quantile, 0.50),
   sigma_q95 = apply(sigma_curve_r1, 2, quantile, 0.95)
 )
-write_csv_safe(pick_sigma_curve_r1, file.path(OUT_DIR, "pick_value_v3_r1_sigma_curve.csv"))
+write_csv_safe(pick_sigma_curve_r1, file.path(OUT_DIR, "picks_Round1.stan_sigma_curve.csv"))
 
 cat(sprintf("Round-1 pick_value_v3 curve non-increasing in %.1f%% of posterior draws\n", 100 * mean(pick_curve_checks_r1$strictly_decreasing)))
 cat(sprintf("Round-1 pick_value_v3 curve has any negative latent mean in %.1f%% of posterior draws\n", 100 * mean(pick_curve_checks_r1$any_negative_mean)))
@@ -1130,7 +1259,7 @@ run_one_pick_r1_sbc <- function(rep_id) {
   )
 
   if (inherits(fit, "error")) {
-    return(list(ranks = tibble(), diag = tibble(rep = rep_id, model = "pick_value_v3_r1", fit_ok = FALSE, error = fit$message)))
+    return(list(ranks = tibble(), diag = tibble(rep = rep_id, model = "picks_Round1.stan", fit_ok = FALSE, error = fit$message)))
   }
 
   draws <- as.matrix(fit$draws(variables = pick_core_vars_r1, format = "draws_matrix"))
@@ -1138,16 +1267,16 @@ run_one_pick_r1_sbc <- function(rep_id) {
 
   ranks <- map_dfr(monitor_vars, function(v) {
     true_val <- unname(as.numeric(truth[[v]]))
-    tibble(rep = rep_id, model = "pick_value_v3_r1", variable = v, truth = true_val,
+    tibble(rep = rep_id, model = "picks_Round1.stan", variable = v, truth = true_val,
            rank = rank_of_truth(draws[, v], true_val), n_draws = nrow(draws))
   })
 
-  nuts <- summarize_nuts(fit, paste0("pick_value_v3_r1_sbc_rep_", rep_id),
+  nuts <- summarize_nuts(fit, paste0("picks_Round1.stan_sbc_rep_", rep_id),
                          max_treedepth = SBC_MAX_TREEDEPTH,
                          write_files = FALSE, run_cmdstan_diagnose = FALSE) %>%
     summarise(divergences = sum(divergences), max_treedepth_hits = sum(max_treedepth_hits),
               min_ebfmi = min(ebfmi, na.rm = TRUE), .groups = "drop") %>%
-    mutate(rep = rep_id, model = "pick_value_v3_r1", fit_ok = TRUE, error = NA_character_) %>%
+    mutate(rep = rep_id, model = "picks_Round1.stan", fit_ok = TRUE, error = NA_character_) %>%
     select(rep, model, fit_ok, error, everything())
 
   list(ranks = ranks, diag = nuts)
@@ -1281,7 +1410,7 @@ run_one_pick_r2_sbc <- function(rep_id) {
   )
 
   if (inherits(fit, "error")) {
-    return(list(ranks = tibble(), diag = tibble(rep = rep_id, model = "pick_play_r2_v6_declining_upside", fit_ok = FALSE, error = fit$message)))
+    return(list(ranks = tibble(), diag = tibble(rep = rep_id, model = "picks_Round2.stan", fit_ok = FALSE, error = fit$message)))
   }
 
   draws <- as.matrix(fit$draws(variables = pick_core_vars_r2, format = "draws_matrix"))
@@ -1289,7 +1418,7 @@ run_one_pick_r2_sbc <- function(rep_id) {
 
   ranks <- map_dfr(monitor_vars, function(v) {
     true_val <- unname(as.numeric(truth[[v]]))
-    tibble(rep = rep_id, model = "pick_play_r2_v6_declining_upside", variable = v, truth = true_val,
+    tibble(rep = rep_id, model = "picks_Round2.stan", variable = v, truth = true_val,
            rank = rank_of_truth(draws[, v], true_val), n_draws = nrow(draws))
   })
 
@@ -1298,13 +1427,13 @@ run_one_pick_r2_sbc <- function(rep_id) {
                          write_files = FALSE, run_cmdstan_diagnose = FALSE) %>%
     summarise(divergences = sum(divergences), max_treedepth_hits = sum(max_treedepth_hits),
               min_ebfmi = min(ebfmi, na.rm = TRUE), .groups = "drop") %>%
-    mutate(rep = rep_id, model = "pick_play_r2_v6_declining_upside", fit_ok = TRUE, error = NA_character_) %>%
+    mutate(rep = rep_id, model = "picks_Round2.stan", fit_ok = TRUE, error = NA_character_) %>%
     select(rep, model, fit_ok, error, everything())
 
   list(ranks = ranks, diag = nuts)
 }
 
-# ---- 7C. team_strength SBC ----------------------------------------------------
+# ---- 7C. team_strength_v3 SBC ----------------------------------------------------
 
 rdirichlet_one <- function(alpha) {
   x <- rgamma(length(alpha), shape = alpha, rate = 1)
@@ -1341,7 +1470,7 @@ run_one_markov_sbc <- function(rep_id) {
   )
 
   if (inherits(fit, "error")) {
-    return(list(ranks = tibble(), diag = tibble(rep = rep_id, model = "team_strength", fit_ok = FALSE, error = fit$message)))
+    return(list(ranks = tibble(), diag = tibble(rep = rep_id, model = "team_strength_v3", fit_ok = FALSE, error = fit$message)))
   }
 
   draws <- as.matrix(fit$draws(variables = "theta", format = "draws_matrix"))
@@ -1352,17 +1481,17 @@ run_one_markov_sbc <- function(rep_id) {
     j <- idx[c, 2]
     v <- sprintf("theta[%d,%d]", i, j)
     true_val <- sim$theta_true[i, j]
-    tibble(rep = rep_id, model = "team_strength", variable = v,
+    tibble(rep = rep_id, model = "team_strength_v3", variable = v,
            from_tier = TIERS[i], to_tier = TIERS[j], truth = true_val,
            rank = rank_of_truth(draws[, c], true_val), n_draws = nrow(draws))
   })
 
-  nuts <- summarize_nuts(fit, paste0("team_strength_sbc_rep_", rep_id),
+  nuts <- summarize_nuts(fit, paste0("team_strength_v3_sbc_rep_", rep_id),
                          max_treedepth = SBC_MAX_TREEDEPTH,
                          write_files = FALSE, run_cmdstan_diagnose = FALSE) %>%
     summarise(divergences = sum(divergences), max_treedepth_hits = sum(max_treedepth_hits),
               min_ebfmi = min(ebfmi, na.rm = TRUE), .groups = "drop") %>%
-    mutate(rep = rep_id, model = "team_strength", fit_ok = TRUE, error = NA_character_) %>%
+    mutate(rep = rep_id, model = "team_strength_v3", fit_ok = TRUE, error = NA_character_) %>%
     select(rep, model, fit_ok, error, everything())
 
   list(ranks = ranks, diag = nuts)
@@ -1379,11 +1508,11 @@ if (RUN_SBC_PICK_R1) {
   }
   pick_sbc_ranks_r1 <- bind_rows(map(pick_sbc_r1, "ranks"))
   pick_sbc_diag_r1 <- bind_rows(map(pick_sbc_r1, "diag"))
-  pick_sbc_summary_r1 <- rank_uniform_summary(pick_sbc_ranks_r1, "pick_value_v3_r1")
-  plot_sbc_ranks(pick_sbc_ranks_r1, "pick_value_v3_r1")
-  write_csv_safe(pick_sbc_ranks_r1, file.path(OUT_DIR, "pick_value_v3_r1_sbc_ranks.csv"))
-  write_csv_safe(pick_sbc_diag_r1, file.path(OUT_DIR, "pick_value_v3_r1_sbc_fit_diagnostics.csv"))
-  sbc_results$pick_value_v3_r1 <- list(ranks = pick_sbc_ranks_r1, diag = pick_sbc_diag_r1, summary = pick_sbc_summary_r1)
+  pick_sbc_summary_r1 <- rank_uniform_summary(pick_sbc_ranks_r1, "picks_Round1.stan")
+  plot_sbc_ranks(pick_sbc_ranks_r1, "picks_Round1.stan")
+  write_csv_safe(pick_sbc_ranks_r1, file.path(OUT_DIR, "picks_Round1.stan_sbc_ranks.csv"))
+  write_csv_safe(pick_sbc_diag_r1, file.path(OUT_DIR, "picks_Round1.stan_sbc_fit_diagnostics.csv"))
+  sbc_results$picks_Round1.stan <- list(ranks = pick_sbc_ranks_r1, diag = pick_sbc_diag_r1, summary = pick_sbc_summary_r1)
 }
 
 if (RUN_SBC_PICK_R2) {
@@ -1395,27 +1524,27 @@ if (RUN_SBC_PICK_R2) {
   }
   pick_sbc_ranks_r2 <- bind_rows(map(pick_sbc_r2, "ranks"))
   pick_sbc_diag_r2 <- bind_rows(map(pick_sbc_r2, "diag"))
-  pick_sbc_summary_r2 <- rank_uniform_summary(pick_sbc_ranks_r2, "pick_play_r2_v6_declining_upside")
-  plot_sbc_ranks(pick_sbc_ranks_r2, "pick_play_r2_v6_declining_upside")
+  pick_sbc_summary_r2 <- rank_uniform_summary(pick_sbc_ranks_r2, "picks_Round2.stan")
+  plot_sbc_ranks(pick_sbc_ranks_r2, "picks_Round2.stan")
   write_csv_safe(pick_sbc_ranks_r2, file.path(OUT_DIR, "pick_play_r2_v6_sbc_ranks.csv"))
   write_csv_safe(pick_sbc_diag_r2, file.path(OUT_DIR, "pick_play_r2_v6_sbc_fit_diagnostics.csv"))
-  sbc_results$pick_play_r2_v6_declining_upside <- list(ranks = pick_sbc_ranks_r2, diag = pick_sbc_diag_r2, summary = pick_sbc_summary_r2)
+  sbc_results$picks_Round2.stan <- list(ranks = pick_sbc_ranks_r2, diag = pick_sbc_diag_r2, summary = pick_sbc_summary_r2)
 }
 
 if (RUN_SBC_MARKOV) {
-  cat("Running team_strength SBC reps:", SBC_REPS_MARKOV, "\n")
+  cat("Running team_strength_v3 SBC reps:", SBC_REPS_MARKOV, "\n")
   markov_sbc <- vector("list", SBC_REPS_MARKOV)
   for (r in seq_len(SBC_REPS_MARKOV)) {
-    cat(sprintf("  team_strength SBC %d / %d\n", r, SBC_REPS_MARKOV))
+    cat(sprintf("  team_strength_v3 SBC %d / %d\n", r, SBC_REPS_MARKOV))
     markov_sbc[[r]] <- run_one_markov_sbc(r)
   }
   markov_sbc_ranks <- bind_rows(map(markov_sbc, "ranks"))
   markov_sbc_diag <- bind_rows(map(markov_sbc, "diag"))
-  markov_sbc_summary <- rank_uniform_summary(markov_sbc_ranks, "team_strength")
-  plot_sbc_ranks(markov_sbc_ranks, "team_strength", max_facets = 25L)
-  write_csv_safe(markov_sbc_ranks, file.path(OUT_DIR, "team_strength_sbc_ranks.csv"))
-  write_csv_safe(markov_sbc_diag, file.path(OUT_DIR, "team_strength_sbc_fit_diagnostics.csv"))
-  sbc_results$team_strength <- list(ranks = markov_sbc_ranks, diag = markov_sbc_diag, summary = markov_sbc_summary)
+  markov_sbc_summary <- rank_uniform_summary(markov_sbc_ranks, "team_strength_v3")
+  plot_sbc_ranks(markov_sbc_ranks, "team_strength_v3", max_facets = 25L)
+  write_csv_safe(markov_sbc_ranks, file.path(OUT_DIR, "team_strength_v3_sbc_ranks.csv"))
+  write_csv_safe(markov_sbc_diag, file.path(OUT_DIR, "team_strength_v3_sbc_fit_diagnostics.csv"))
+  sbc_results$team_strength_v3 <- list(ranks = markov_sbc_ranks, diag = markov_sbc_diag, summary = markov_sbc_summary)
 }
 
 # ==============================================================================
@@ -1450,7 +1579,7 @@ validation_decision <- bind_rows(
       .groups = "drop"
     ),
   tibble(
-    model = "pick_value_v3_r1",
+    model = "picks_Round1.stan",
     check = "PPC coverage",
     metric = sprintf("90%% interval coverage %.1f%%; max |z| %.2f",
                      100 * mean(pick_ppc_summary_r1$covered_90),
@@ -1459,7 +1588,7 @@ validation_decision <- bind_rows(
       max(abs(pick_ppc_summary_r1$z_resid), na.rm = TRUE) <= 4
   ),
   tibble(
-    model = "pick_play_r2_v6_declining_upside",
+    model = "picks_Round2.stan",
     check = "PPC coverage / play rate",
     metric = sprintf("90%% interval coverage %.1f%%; observed play %.1f%%; rep play %.1f%%",
                      100 * mean(pick_ppc_summary_r2$covered_90),
@@ -1469,14 +1598,17 @@ validation_decision <- bind_rows(
       abs(mean(played_obs_r2 == 1) - mean(pick_ppc_summary_r2$played_rep_prob)) <= 0.10
   ),
   tibble(
-    model = "team_strength",
-    check = "Conjugacy / code check",
-    metric = sprintf("max |Stan mean - closed form| %.6f", max(markov_closed_form_check$abs_diff, na.rm = TRUE)),
-    pass = max(markov_closed_form_check$abs_diff, na.rm = TRUE) < 0.01
+    model = "team_strength_v3",
+    check = "Rank transition row sums / smoothness",
+    metric = sprintf("row-sum error %.2e; adjacent-row diff %.4f; tier diff %.4f",
+                     rank_surface_check$max_row_sum_error,
+                     rank_surface_check$mean_abs_adjacent_row_diff,
+                     rank_surface_check$mean_abs_tier_diff_vs_empirical),
+    pass = rank_surface_check$max_row_sum_error < 1e-8
   ),
   tibble(
-    model = "team_strength",
-    check = "PPC transition stats",
+    model = "team_strength_v3",
+    check = "PPC rank-transition stats",
     metric = paste(
       sprintf("observed stays %s", markov_ppc_obs$total_stay),
       sprintf("big jumps %s", markov_ppc_obs$big_jumps),
@@ -1490,7 +1622,7 @@ if (!is.null(pick_loo_r1)) {
   validation_decision <- bind_rows(
     validation_decision,
     tibble(
-      model = "pick_value_v3_r1",
+      model = "picks_Round1.stan",
       check = "PSIS-LOO",
       metric = sprintf("elpd_loo %.2f; max Pareto-k %.2f",
                        pick_loo_r1$estimates["elpd_loo", "Estimate"],
@@ -1504,7 +1636,7 @@ if (!is.null(pick_loo_r2)) {
   validation_decision <- bind_rows(
     validation_decision,
     tibble(
-      model = "pick_play_r2_v6_declining_upside",
+      model = "picks_Round2.stan",
       check = "PSIS-LOO",
       metric = sprintf("elpd_loo %.2f; max Pareto-k %.2f",
                        pick_loo_r2$estimates["elpd_loo", "Estimate"],
@@ -1518,7 +1650,7 @@ if (!is.null(markov_loo)) {
   validation_decision <- bind_rows(
     validation_decision,
     tibble(
-      model = "team_strength",
+      model = "team_strength_v3",
       check = "PSIS-LOO row-level",
       metric = sprintf("elpd_loo %.2f; max Pareto-k %.2f",
                        markov_loo$estimates["elpd_loo", "Estimate"],
@@ -1532,7 +1664,7 @@ if (RUN_SBC_PICK_R1 && exists("pick_sbc_summary_r1")) {
   validation_decision <- bind_rows(
     validation_decision,
     tibble(
-      model = "pick_value_v3_r1",
+      model = "picks_Round1.stan",
       check = "SBC rank uniformity",
       metric = sprintf("min KS p-value %.3f across monitored params", min(pick_sbc_summary_r1$ks_p, na.rm = TRUE)),
       pass = min(pick_sbc_summary_r1$ks_p, na.rm = TRUE) > 0.01
@@ -1544,7 +1676,7 @@ if (RUN_SBC_PICK_R2 && exists("pick_sbc_summary_r2")) {
   validation_decision <- bind_rows(
     validation_decision,
     tibble(
-      model = "pick_play_r2_v6_declining_upside",
+      model = "picks_Round2.stan",
       check = "SBC rank uniformity",
       metric = sprintf("min KS p-value %.3f across monitored params", min(pick_sbc_summary_r2$ks_p, na.rm = TRUE)),
       pass = min(pick_sbc_summary_r2$ks_p, na.rm = TRUE) > 0.01
@@ -1556,7 +1688,7 @@ if (RUN_SBC_MARKOV && exists("markov_sbc_summary")) {
   validation_decision <- bind_rows(
     validation_decision,
     tibble(
-      model = "team_strength",
+      model = "team_strength_v3",
       check = "SBC rank uniformity",
       metric = sprintf("min KS p-value %.3f across theta cells", min(markov_sbc_summary$ks_p, na.rm = TRUE)),
       pass = min(markov_sbc_summary$ks_p, na.rm = TRUE) > 0.01
@@ -1571,25 +1703,29 @@ print(validation_decision)
 validation_results_latest_models <- list(
   parameter_summary = all_param_summary,
   nuts = all_nuts,
-  pick_value_v3_r1 = list(
+  picks_Round1.stan = list(
     ppc_summary = pick_ppc_summary_r1,
     ppc_by_pick = pick_ppc_by_pick_r1,
     loo = pick_loo_r1,
     curve_checks = pick_curve_checks_r1,
     sigma_curve = pick_sigma_curve_r1
   ),
-  pick_play_r2_v6_declining_upside = list(
+  picks_Round2.stan = list(
     ppc_summary = pick_ppc_summary_r2,
     ppc_by_band = ws_dist_band_check_r2,
     loo = pick_loo_r2,
     curve_checks = pick_curve_checks_r2,
     curve_summary = pick_curve_summary_r2
   ),
-  team_strength = list(
+  team_strength_v3 = list(
     ppc_observed = markov_ppc_obs,
     ppc_replicated = markov_ppc_rep,
     loo = markov_loo,
-    closed_form_check = markov_closed_form_check
+    rank_surface_check = rank_surface_check,
+    tier_transition_check = tier_transition_check,
+    horizon_calibration = rank_transition_horizon_validation,
+    lottery_band_calibration_1yr = rank_band_calibration_1yr,
+    rolling_origin_validation = rank_rolling_origin_validation
   ),
   sbc = sbc_results,
   decision_table = validation_decision,
@@ -1608,8 +1744,8 @@ validation_results_latest_models <- list(
     generated_log_lik_if_missing = GENERATE_LOG_LIK_IF_MISSING,
     models = list(
       pick_value_v3 = resolve_required_file(PICK_MODEL_R1_PATH),
-      pick_play_r2_v6_declining_upside = resolve_required_file(PICK_MODEL_R2_PATH),
-      team_strength = resolve_required_file(TEAM_STRENGTH_MODEL_PATH)
+      picks_Round2.stan = resolve_required_file(PICK_MODEL_R2_PATH),
+      team_strength_v3 = resolve_required_file(TEAM_STRENGTH_MODEL_PATH)
     )
   )
 )

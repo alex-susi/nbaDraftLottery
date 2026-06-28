@@ -1,30 +1,93 @@
 ## ═════════════════════════════════════════════════════════════════════════════
-## 07 - BUILD MARKOV TRANSITION MATRIX & DIRICHLET PRIOR -----------------------
+## 07 - BUILD RANK-STATE MARKOV TRANSITION DATA -------------------------------
 ## ═════════════════════════════════════════════════════════════════════════════
 
-cat("\n--- Building 5-Tier Markov Transition Counts ---\n")
+cat("\n--- Building 30-Rank Markov Transition Counts ---\n")
 
-transitions <- all_standings %>%
+# Production team-strength state: exact league-wide draft rank, where
+#   rank_worst = 1  is the worst record / old lottery seed 1
+#   rank_worst = 30 is the best record / pick 30 by inverse record.
+# This rank-state model replaces the old 5-tier production simulator. The five
+# 3-2-1 tiers are retained below as derived validation / display buckets.
+N_RANKS <- 30L
+RANK_STATES <- seq_len(N_RANKS)
+RANK_STATE_LABELS <- sprintf("Rank %02d", RANK_STATES)
+
+if (!"rank_worst" %in% names(all_standings)) {
+  all_standings <- all_standings %>%
+    group_by(season) %>%
+    mutate(rank_worst = as.integer(max(overall_rank, na.rm = TRUE) + 1L - overall_rank)) %>%
+    ungroup()
+}
+
+current_standings <- current_standings %>%
+  mutate(rank_worst = as.integer(max(overall_rank, na.rm = TRUE) + 1L - overall_rank))
+
+current_rank_worst0 <- setNames(as.integer(current_standings$rank_worst),
+                                current_standings$abbr)
+
+rank_to_tier_from_worst <- function(rank_worst) {
+  rank_worst <- as.integer(rank_worst)
+  dplyr::case_when(
+    rank_worst <= 3L  ~ "relegation",
+    rank_worst <= 10L ~ "nonplayin",
+    rank_worst <= 14L ~ "playin_seed",
+    rank_worst <= 16L ~ "playin_loser",
+    TRUE              ~ "playoff"
+  )
+}
+
+rank_tier_lookup <- tibble(
+  rank_worst = RANK_STATES,
+  tier = factor(rank_to_tier_from_worst(rank_worst), levels = TIERS)
+)
+
+rank_transitions <- all_standings %>%
+  arrange(abbr, season) %>%
+  group_by(abbr) %>%
+  mutate(rank_next = lead(rank_worst), season_next = lead(season)) %>%
+  ungroup() %>%
+  filter(!is.na(rank_next), season_next == season + 1) %>%
+  transmute(abbr, season,
+            rank_worst = as.integer(rank_worst),
+            rank_next = as.integer(rank_next))
+
+rank_counts_mat <- matrix(0L, N_RANKS, N_RANKS,
+                          dimnames = list(from = RANK_STATE_LABELS,
+                                          to   = RANK_STATE_LABELS))
+for (r in seq_len(nrow(rank_transitions))) {
+  i <- rank_transitions$rank_worst[r]
+  j <- rank_transitions$rank_next[r]
+  rank_counts_mat[i, j] <- rank_counts_mat[i, j] + 1L
+}
+
+cat("  Observed rank transition count total:\n")
+print(sum(rank_counts_mat))
+cat("  Row totals by current rank:\n")
+print(rowSums(rank_counts_mat))
+
+# Keep the old five-tier counts as a benchmark and as a dashboard-friendly
+# aggregation of the rank model. These are no longer the production simulator.
+tier_transitions <- all_standings %>%
   arrange(abbr, season) %>%
   group_by(abbr) %>%
   mutate(tier_next = lead(tier), season_next = lead(season)) %>%
   ungroup() %>%
   filter(!is.na(tier_next), season_next == season + 1)
 
-counts_mat <- matrix(0L, N_TIERS, N_TIERS,
-                     dimnames = list(TIERS, TIERS))
-for (r in seq_len(nrow(transitions))) {
-  i <- match(as.character(transitions$tier[r]), TIERS)
-  j <- match(as.character(transitions$tier_next[r]), TIERS)
-  counts_mat[i, j] <- counts_mat[i, j] + 1L
+tier_counts_mat <- matrix(0L, N_TIERS, N_TIERS,
+                          dimnames = list(from = TIERS, to = TIERS))
+for (r in seq_len(nrow(tier_transitions))) {
+  i <- match(as.character(tier_transitions$tier[r]), TIERS)
+  j <- match(as.character(tier_transitions$tier_next[r]), TIERS)
+  tier_counts_mat[i, j] <- tier_counts_mat[i, j] + 1L
 }
 
-cat("  Observed transition counts:\n")
-print(counts_mat)
+cat("\n  Five-tier benchmark transition counts:\n")
+print(tier_counts_mat)
 
-# Dirichlet prior: adjacency-aware concentrations. Staying put or moving one
-# tier is a priori likelier than big jumps. This regularizes sparse rows
-# (e.g. relegation -> playoff is rarely observed but should not be exactly 0).
+# Dirichlet prior for the legacy 5-tier benchmark only. The production rank
+# model below uses a smoothed softmax surface rather than a conjugate Dirichlet.
 build_alpha <- function(K, stay = 3, adj = 1.5, far = 0.4, decay = 0.6) {
   a <- matrix(far, K, K)
   for (i in 1:K) for (j in 1:K) {
@@ -34,19 +97,96 @@ build_alpha <- function(K, stay = 3, adj = 1.5, far = 0.4, decay = 0.6) {
   }
   a
 }
-alpha_prior <- build_alpha(N_TIERS)
 
-# Closed-form posterior mean (Dirichlet-Multinomial conjugacy) as a check.
-posterior_mean_closed <- (counts_mat + alpha_prior) /
-  rowSums(counts_mat + alpha_prior)
-cat("\n  Closed-form posterior-mean transition matrix:\n")
-print(round(posterior_mean_closed, 3))
+tier_alpha_prior <- build_alpha(N_TIERS)
+tier_posterior_mean_closed <- (tier_counts_mat + tier_alpha_prior) /
+  rowSums(tier_counts_mat + tier_alpha_prior)
+
+# Backward-compatible aliases for scripts that inspect transition counts. From
+# v2 onward, counts_mat is the production 30-rank count matrix.
+counts_mat <- rank_counts_mat
+posterior_mean_closed <- tier_posterior_mean_closed
+
+aggregate_rank_transition_to_tier <- function(P_rank) {
+  out <- matrix(0, N_TIERS, N_TIERS, dimnames = list(from = TIERS, to = TIERS))
+  for (a in seq_along(TIERS)) {
+    from_ranks <- rank_tier_lookup$rank_worst[rank_tier_lookup$tier == TIERS[a]]
+    for (b in seq_along(TIERS)) {
+      to_ranks <- rank_tier_lookup$rank_worst[rank_tier_lookup$tier == TIERS[b]]
+      out[a, b] <- mean(rowSums(P_rank[from_ranks, to_ranks, drop = FALSE]))
+    }
+  }
+  out / rowSums(out)
+}
+
+# ---- Kernel-smoothed empirical rank transition baseline ----------------------
+# Stable no-HMC benchmark. It shares information across neighboring starting
+# ranks and neighboring ending ranks, then adds a small distance-decay prior so
+# sparse / empty empirical cells never become structural zeroes. This is the
+# transparent baseline the Stan model must beat before it replaces production.
+normalize_rows <- function(M) {
+  rs <- rowSums(M)
+  bad <- !is.finite(rs) | rs <= 0
+  if (any(bad)) {
+    M[bad, ] <- 1 / ncol(M)
+    rs <- rowSums(M)
+  }
+  sweep(M, 1, rs, `/`)
+}
+
+rank_kernel_weights <- function(K, bandwidth = 1.75) {
+  idx <- seq_len(K)
+  W <- outer(idx, idx, function(target, observed) exp(-abs(target - observed) / bandwidth))
+  normalize_rows(W)
+}
+
+build_rank_kernel_transition <- function(counts,
+                                         source_bw = 1.50,
+                                         dest_bw = 1.75,
+                                         neighbor_weight = 0.75,
+                                         distance_bw = 7.0,
+                                         distance_prior_mass = 4.0,
+                                         base_mass = 0.05) {
+  K <- nrow(counts)
+  stopifnot(ncol(counts) == K)
+
+  W_source <- rank_kernel_weights(K, source_bw)
+  W_dest   <- rank_kernel_weights(K, dest_bw)
+
+  # Smoothed empirical counts: source ranks near i and destination ranks near j
+  # contribute to cell (i, j), but the original counts still retain local identity.
+  smoothed_counts <- W_source %*% counts %*% t(W_dest)
+
+  # Light structural prior: nearby future ranks should be a priori more likely
+  # than extreme jumps, without preventing big jumps when observed.
+  idx <- seq_len(K)
+  distance_kernel <- outer(idx, idx, function(i, j) exp(-abs(i - j) / distance_bw))
+  distance_kernel <- normalize_rows(distance_kernel)
+
+  posterior_pseudocounts <-
+    counts +
+    neighbor_weight * smoothed_counts +
+    distance_prior_mass * distance_kernel +
+    base_mass
+
+  out <- normalize_rows(posterior_pseudocounts)
+  dimnames(out) <- dimnames(counts)
+  out
+}
+
+rank_kernel_transition_matrix <- build_rank_kernel_transition(rank_counts_mat)
+rank_kernel_tier_transition_matrix <- aggregate_rank_transition_to_tier(rank_kernel_transition_matrix)
+
+cat("\n  Kernel-smoothed empirical 30-rank baseline: first 10x10 block\n")
+print(round(rank_kernel_transition_matrix[1:10, 1:10], 3))
+print(round(rank_kernel_transition_matrix, 4))
+
+cat("\n  Kernel-smoothed empirical five-tier implied baseline\n")
+print(round(rank_kernel_tier_transition_matrix, 3))
 
 
 
 
-
-## ═════════════════════════════════════════════════════════════════════════════
 ## 08 - FIT STAN MODELS --------------------------------------------------------
 ## ═════════════════════════════════════════════════════════════════════════════
 
@@ -471,7 +611,8 @@ pick2_cond_mu_draws     <- extract_stan_vector_draws(fit_r2, "mean_play", K = 30
 pick2_cond_scale_draws  <- extract_stan_vector_draws(fit_r2, "sd_typ", K = 30L)
 pick2_cond_sd_draws     <- extract_stan_vector_draws(fit_r2, "sd_play", K = 30L)
 pick2_mu_draws          <- extract_stan_vector_draws(fit_r2, "ev", K = 30L)
-pick2_mu_draws          <- extract_stan_vector_draws(fit_r2, "ev_sd", K = 30L)
+#pick2_mu_draws          <- extract_stan_vector_draws(fit_r2, "ev_sd", K = 30L)
+pick2_sd_draws          <- extract_stan_vector_draws(fit_r2, "ev_sd", K = 30L)
 pick2_outcome_draws     <- extract_stan_vector_draws(fit_r2, "y_pick_rep", K = 30L)
 pick2_upside_prob_draws <- extract_stan_vector_draws(fit_r2, "u_prob", K = 30L)
 n_pick2_draws <- nrow(pick2_p_play_draws)
@@ -677,69 +818,138 @@ print(loo::pareto_k_table(loo_pick_r2))
 
 
 
-### 09.04 - MARKOV TRANSITION MODEL VALIDATION ------------------------------------
-cat("\n--- Fitting Markov Transition Stan Model ---\n")
+### 09.04 - RANK-STATE MARKOV TRANSITION MODEL VALIDATION ----------------------
+cat("\n--- Fitting 30-Rank Team-Strength Stan Model ---\n")
 
-markov_model <- cmdstan_model("02_models/team_strength.stan")
+TEAM_STRENGTH_V3_PATH <- if (file.exists("02_models/team_strength_v3.stan")) {
+  "02_models/team_strength_v3.stan"
+} else {
+  "team_strength_v3.stan"
+}
 
-markov_fit <- markov_model$sample(data = list(K = N_TIERS,
-                                              counts = counts_mat,
-                                              alpha = alpha_prior),
+# Fixed smoothing constants for team_strength_v3.stan. These are intentionally
+# not learned parameters; v2 diagnostics showed that learned sigma_eta /
+# sigma_row / sigma_col collapsed near zero and created poor geometry.
+rank_markov_stan_data <- list(
+  K = N_RANKS,
+  counts = rank_counts_mat,
+  eta_scale = 0.30,
+  row_smooth_scale = 0.12,
+  col_smooth_scale = 0.12,
+  dest_scale = 0.35
+)
+
+markov_model <- cmdstan_model(TEAM_STRENGTH_V3_PATH)
+
+markov_fit <- markov_model$sample(data = rank_markov_stan_data,
                                   chains = 4,
                                   parallel_chains = 4,
                                   iter_warmup = 1000,
                                   iter_sampling = 2000,
+                                  adapt_delta = 0.95,
+                                  max_treedepth = 12,
                                   seed = 2026,
-                                  refresh = 0)
+                                  refresh = 100)
+markov_fit$cmdstan_diagnose()
+markov_fit$cmdstan_summary()
 
-nuts_markov <- summarise_nuts(markov_fit, "markov_transition", max_treedepth = 12L)
+rank_markov_core_vars <- c("distance_slope")
+rank_markov_param_summary <- summarise_rhat_ess(fit = markov_fit,
+                                                variables = rank_markov_core_vars,
+                                                model_name = "30-rank fixed-smoothing Markov model")
 
+nuts_markov <- summarise_nuts(markov_fit, "rank_markov_transition_v3", max_treedepth = 12L)
+
+# theta[draw, from_rank, to_rank], where rank 1 = worst and rank 30 = best.
 theta_draws <- draws_matrix(markov_fit, "theta")
 n_markov_draws <- nrow(theta_draws)
 
 get_theta_row <- function(draw_idx, i) {
-  vapply(1:N_TIERS,
+  vapply(seq_len(N_RANKS),
          function(j) theta_draws[draw_idx, sprintf("theta[%d,%d]", i, j)],
          numeric(1))
 }
 
-# Stan posterior mean should match the conjugate Dirichlet posterior mean.
-post_trans <- matrix(0, N_TIERS, N_TIERS, dimnames = list(TIERS, TIERS))
-for (i in 1:N_TIERS) {
-  for (j in 1:N_TIERS) {
+post_trans <- matrix(0, N_RANKS, N_RANKS,
+                     dimnames = list(from = RANK_STATE_LABELS,
+                                     to   = RANK_STATE_LABELS))
+for (i in seq_len(N_RANKS)) {
+  for (j in seq_len(N_RANKS)) {
     post_trans[i, j] <- mean(theta_draws[, sprintf("theta[%d,%d]", i, j)])
   }
 }
 
-cat("\n  Stan posterior-mean transition matrix\n")
-print(round(post_trans, 3))
+post_rank_trans <- post_trans
+post_tier_trans <- aggregate_rank_transition_to_tier(post_rank_trans)
 
-cat(sprintf("  max |Stan - closed form| = %.4f\n",
-            max(abs(post_trans - posterior_mean_closed))))
+cat("\n  Stan v3 posterior-mean 30-rank transition matrix: first 10x10 block\n")
+print(round(post_rank_trans[1:10, 1:10], 3))
+
+cat("\n  Kernel-smoothed empirical 30-rank baseline: first 10x10 block\n")
+print(round(rank_kernel_transition_matrix[1:10, 1:10], 3))
+
+cat("\n  Stan v3 rank-model-implied five-tier transition matrix\n")
+print(round(post_tier_trans, 3))
+
+cat("\n  Kernel-smoothed empirical five-tier implied baseline\n")
+print(round(rank_kernel_tier_transition_matrix, 3))
+
+cat("\n  Legacy five-tier closed-form benchmark matrix\n")
+print(round(tier_posterior_mean_closed, 3))
 
 markov_diagnostics <- function(P) {
   ev <- eigen(t(P))
   idx <- which.min(abs(ev$values - 1))
   pi_stat <- Re(ev$vectors[, idx])
   pi_stat <- pi_stat / sum(pi_stat)
-  
+
   lam <- sort(abs(Re(ev$values)), decreasing = TRUE)
-  
+
   list(stationary = pi_stat,
        lambda2 = lam[2],
        mixing_time = -1 / log(lam[2]))
 }
 
-mc_diag <- markov_diagnostics(post_trans)
-names(mc_diag$stationary) <- TIERS
+mc_diag <- markov_diagnostics(post_rank_trans)
+names(mc_diag$stationary) <- RANK_STATE_LABELS
+mc_diag_tier <- markov_diagnostics(post_tier_trans)
+names(mc_diag_tier$stationary) <- TIERS
 
-cat("\n  Stationary tier distribution\n")
+kernel_diag <- markov_diagnostics(rank_kernel_transition_matrix)
+names(kernel_diag$stationary) <- RANK_STATE_LABELS
+kernel_diag_tier <- markov_diagnostics(rank_kernel_tier_transition_matrix)
+names(kernel_diag_tier$stationary) <- TIERS
+
+rank_transition_smoothness <- tibble(
+  model = "stan_v3_fixed_smoothing",
+  mean_abs_adjacent_row_diff = mean(abs(post_rank_trans[-1, ] - post_rank_trans[-N_RANKS, ])),
+  mean_abs_adjacent_col_diff = mean(abs(post_rank_trans[, -1] - post_rank_trans[, -N_RANKS])),
+  mean_diagonal_probability = mean(diag(post_rank_trans)),
+  max_row_sum_error = max(abs(rowSums(post_rank_trans) - 1))
+)
+
+kernel_transition_smoothness <- tibble(
+  model = "kernel_smoothed_empirical",
+  mean_abs_adjacent_row_diff = mean(abs(rank_kernel_transition_matrix[-1, ] - rank_kernel_transition_matrix[-N_RANKS, ])),
+  mean_abs_adjacent_col_diff = mean(abs(rank_kernel_transition_matrix[, -1] - rank_kernel_transition_matrix[, -N_RANKS])),
+  mean_diagonal_probability = mean(diag(rank_kernel_transition_matrix)),
+  max_row_sum_error = max(abs(rowSums(rank_kernel_transition_matrix) - 1))
+)
+
+rank_transition_smoothness <- bind_rows(rank_transition_smoothness, kernel_transition_smoothness)
+
+cat("\n  Rank transition smoothness diagnostics\n")
+print(rank_transition_smoothness)
+
+cat("\n  Stationary rank distribution: all ranks\n")
 print(round(mc_diag$stationary, 3))
 
-cat(sprintf("  2nd eigenvalue %.3f -> mixing time %.1f years\n",
+cat(sprintf("  Stan v3 rank-chain 2nd eigenvalue %.3f -> mixing time %.1f years\n",
             mc_diag$lambda2,
             mc_diag$mixing_time))
-
+cat(sprintf("  Kernel baseline rank-chain 2nd eigenvalue %.3f -> mixing time %.1f years\n",
+            kernel_diag$lambda2,
+            kernel_diag$mixing_time))
 
 
 
