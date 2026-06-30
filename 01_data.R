@@ -1,26 +1,21 @@
 ## ═════════════════════════════════════════════════════════════════════════════
 # NBA Draft Lottery Rule Change Impact Model
 #
-#   1. Lottery system is now the APPROVED 3-2-1 format (NBA BOG, May 2026),
-#      effective 2027-2029. 2026 used the OLD system and its results are now
-#      FINAL, so 2026 pick values are locked to the actual draft slots.
+#   1. Lottery system is now the APPROVED 3-2-1 format effective 2027-2029. 
+#      2026 pick values are locked to the actual draft slots.
 #   2. Markov chain states are the FIVE 3-2-1 tiers (relegation / non-play-in /
 #      9-10 seed / 7v8 play-in loser / playoff), not generic standings buckets.
-#   3. Pick value = mean WIN SHARES over a player's FIRST 4 SEASONS (rookie
-#      deal), scraped via hoopR draft history + bbref advanced tables, with a
-#      bootstrap OR Bayesian curve (toggle below) for uncertainty.
-#   4. New anti-tank pick RESTRICTIONS are modeled: no team may receive the #1
+#   3. Pick value = win shares over a player's first 4 seasons.
+#   4. New anti-tank pick restrictions are modeled: no team may receive the #1
 #      pick in consecutive years or a top-5 pick three years running (applies
-#      to the originally-owning team, looking back to 2025); traded picks can
-#      no longer be protected in the 12-15 band.
-#   5. Future pick ownership refreshed from RealGM / prosportstransactions and
-#      the post-lottery 2026 order.
+#      to the originally-owning team, looking back to 2025).
+#   5. Future pick ownership refreshed from RealGM.
 #
 # Pipeline:
 #   1. Scrape standings (bbref), rosters, draft production
-#   2. Build 5-tier Markov transition counts from history
+#   2. Build Markov transition counts from history
 #   3. Fit Stan models (pick value + Markov) and validate them
-#   4. Monte Carlo: project tiers forward, run BOTH lotteries, value every
+#   4. Monte Carlo: project tiers forward, run both old and new lotteries, value every
 #      owned pick under each system, applying protections / swaps / new rules
 #   5. Export dashboard_data.rds for the Shiny app
 #

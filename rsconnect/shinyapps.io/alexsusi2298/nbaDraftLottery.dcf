@@ -5,9 +5,9 @@ account: alexsusi2298
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 17537031
-bundleId: 12159800
+bundleId: 12192309
 url: https://alexsusi2298.shinyapps.io/nbaDraftLottery/
 version: 1
 asMultiple: FALSE
 asStatic: FALSE
-ignoredFiles: .RData|.RDataTmp|.RDataTmp1|01_data/Advanced.csv|01_data/draft_slots_cache.rds|01_data/possessions_cache.rds|01_data/xrapm_cache.rds|01_data.R|02_picks.R|03_models.R|04_lotterySims.R|05_model_validation.R|NBA_321_DraftLotteryReform_Research.pdf|nba_321_lottery_article.html|nba_321_lottery_article.md|README.md|02_models|03_validation|zz_Archive
+ignoredFiles: .RData|01_data.R|02_picks.R|03_models.R|04_lotterySims.R|05_model_validation.R|NBA_321_DraftLotteryReform_Research.pdf|nba_321_lottery_article.html|nba_321_lottery_article.md|README.md|01_data|02_models|03_validation|zz_Archive

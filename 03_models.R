@@ -2,7 +2,6 @@
 ## 07 - BUILD RANK-STATE MARKOV TRANSITION DATA -------------------------------
 ## ═════════════════════════════════════════════════════════════════════════════
 
-cat("\n--- Building 30-Rank Markov Transition Counts ---\n")
 
 # Production team-strength state: exact league-wide draft rank, where
 #   rank_worst = 1  is the worst record / old lottery seed 1
@@ -187,6 +186,11 @@ print(round(rank_kernel_tier_transition_matrix, 3))
 
 
 
+
+
+
+
+## ═════════════════════════════════════════════════════════════════════════════
 ## 08 - FIT STAN MODELS --------------------------------------------------------
 ## ═════════════════════════════════════════════════════════════════════════════
 
@@ -253,7 +257,7 @@ fit_r1_v3$cmdstan_diagnose()
 
 
 
-# ---- ROUND 2: structural-zero hurdle model
+# Second round picks: structural-zero hurdle model
 pick_fit_data_r2 <- draft_4yr_r2 %>%
   transmute(draft_year = as.integer(draft_year),
             pick       = as.integer(pick),
@@ -285,6 +289,29 @@ fit_r2 <- model_r2$sample(data            = pick_stan_data_r2,
                           seed            = 2026,
                           refresh         = 100)
 fit_r2$cmdstan_diagnose()
+
+
+
+# Markov Chain model for team strength
+rank_markov_stan_data <- list(K = N_RANKS,
+                              counts = rank_counts_mat,
+                              eta_scale = 0.30,
+                              row_smooth_scale = 0.12,
+                              col_smooth_scale = 0.12,
+                              dest_scale = 0.35)
+
+markov_model <- cmdstan_model("02_models/team_strength_v3.stan")
+
+markov_fit <- markov_model$sample(data = rank_markov_stan_data,
+                                  chains = 4,
+                                  parallel_chains = 4,
+                                  iter_warmup = 1000,
+                                  iter_sampling = 2000,
+                                  adapt_delta = 0.95,
+                                  max_treedepth = 12,
+                                  seed = 2026,
+                                  refresh = 100)
+markov_fit$cmdstan_diagnose()
 
 
 
@@ -819,38 +846,7 @@ print(loo::pareto_k_table(loo_pick_r2))
 
 
 ### 09.04 - RANK-STATE MARKOV TRANSITION MODEL VALIDATION ----------------------
-cat("\n--- Fitting 30-Rank Team-Strength Stan Model ---\n")
 
-TEAM_STRENGTH_V3_PATH <- if (file.exists("02_models/team_strength_v3.stan")) {
-  "02_models/team_strength_v3.stan"
-} else {
-  "team_strength_v3.stan"
-}
-
-# Fixed smoothing constants for team_strength_v3.stan. These are intentionally
-# not learned parameters; v2 diagnostics showed that learned sigma_eta /
-# sigma_row / sigma_col collapsed near zero and created poor geometry.
-rank_markov_stan_data <- list(
-  K = N_RANKS,
-  counts = rank_counts_mat,
-  eta_scale = 0.30,
-  row_smooth_scale = 0.12,
-  col_smooth_scale = 0.12,
-  dest_scale = 0.35
-)
-
-markov_model <- cmdstan_model(TEAM_STRENGTH_V3_PATH)
-
-markov_fit <- markov_model$sample(data = rank_markov_stan_data,
-                                  chains = 4,
-                                  parallel_chains = 4,
-                                  iter_warmup = 1000,
-                                  iter_sampling = 2000,
-                                  adapt_delta = 0.95,
-                                  max_treedepth = 12,
-                                  seed = 2026,
-                                  refresh = 100)
-markov_fit$cmdstan_diagnose()
 markov_fit$cmdstan_summary()
 
 rank_markov_core_vars <- c("distance_slope")
