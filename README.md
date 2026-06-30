@@ -58,7 +58,7 @@ Trade Machine
 
 1. There's a lot of uncertainty in projecting future expected pick value. Between the difficulty of predicting team performances and the increased randomness of the draft lottery, many individual picks and total team portfolios show small changes in expected value.
 
-2. In the long run (7 years in this case, since that's the furthest out draft picks can be traded), team-strength projections converge toward league-average . As a result, far-future first-round picks cluster around roughly 9.2 EPV and far-future second-round pickss around roughly 2.5 EPV.
+2. In the long run (7 years in this case, since that's the furthest out draft picks can be traded), team-strength projections converge toward league-average (15th best record). As a result, far-future first-round picks cluster around roughly 9.2 EPV and far-future second-round picks around roughly 2.5 EPV.
 
 3. The largest increases and decreases in single-pick EPV are:
 
@@ -410,10 +410,10 @@ parameters {
   //
   // s[p] controls how wide the range of typical player outcomes is. 
   //    Larger values mean more uncertainty around what a non-star NBA contributor 
-  //    from that pick might becomw
+  //    from that pick might become
   real s_log_31;       // baseline outcome spread for pick 31 (log scale)
   real<lower=0> tau_s; // pick-to-pick curve flexibility
-  vector[29] z_s;      // pick-by-pick cureve adjustments
+  vector[29] z_s;      // pick-by-pick curve adjustments
 
 
   // ---------------------------------------------------------------------------
@@ -438,8 +438,8 @@ parameters {
 
 
 transformed parameters {
-  vector[30] eta;                    // Play prbabilities (log scale)
-  vector<lower=0, upper=1>[30] pi_p; // Play prbabilities (0-100%)
+  vector[30] eta;                    // Play probabilities (log scale)
+  vector<lower=0, upper=1>[30] pi_p; // Play probabilities (0-100%)
   vector[30] m;                      // Typical 4-year WS outcomes (log scale)
   vector[30] s_log;                  // Typical 4-year WS outcome spread (log scale)
   vector<lower=0>[30] s;             // Positive outcome spread used in the lognormal likelihood
@@ -635,7 +635,7 @@ generated quantities {
 
 ### Team-Strength Model
 
-A Bayesian Markov chain over all 30 league-wide standing positions. The five 3-2-1 lottery tiers are then derived from the simulated rank:
+A Bayesian Markov chain over all 30 league-wide standing positions. The five 3-2-1 lottery tiers are then derived from the simulated rank, where 1 = worst record:
 
 | Rank range | 3-2-1 tier |
 |---:|---|
@@ -645,7 +645,7 @@ A Bayesian Markov chain over all 30 league-wide standing positions. The five 3-2
 | 15–16 | Play-in 7/8 loser |
 | 17–30 | Playoff |
 
-Note that this is an imperfect mapping to the lottery tiers, as it does not account for within-conference seeding, nor does it simulate play-in game outcomes. 
+> Note that this is an imperfect mapping to the lottery tiers, as it does not account for within-conference seeding, nor does it simulate play-in game outcomes. 
 
 The model estimates a $30 \times 30$ transition matrix:
 
@@ -886,11 +886,11 @@ The Trade Machine can be used to analyze 3 different questions for this transact
 
 | Metric | Memphis | OKC |
 |---|---:|---:|
-| Expected Pick Value received | `[12.2]` | `[7.6]` |
+| Expected Pick Value received | `12.2` | `7.6` |
 | Probability of more total 4-YR WS | `64%` | `36%` |
 | Probability of best single player | `59%` | `41%` |
 
-On paper, this is good business for Memphis. The expected value lost from moving down only 1 draft slot is more than compensated for by picking up 2 future second-round picks. The trade machine estimates Memphis received `12.2` EPV and sent out `[7.6]` EPV, a net gain of `[4.6]` EPV. However, Memphis is not guaranteed to get more productivity out of the players selected with these picks, but the model favors them with about a 64% chance. The trade machine also likes Memphis' chances to get the single-most productive player with the picks involved in this deal, at about a 59% rate. 
+On paper, this is good business for Memphis. The expected value lost from moving down only 1 draft slot is more than compensated for by picking up 2 future second-round picks. The trade machine estimates Memphis received `12.2` EPV and sent out `7.6` EPV, a net gain of `4.6` EPV. However, Memphis is not guaranteed to get more productivity out of the players selected with these picks, but the model favors them with about a 64% chance. The trade machine also likes Memphis' chances to get the single-most productive player with the picks involved in this deal, at about a 59% rate. 
 
 Important caveat - trades like this during the draft are often done when a team is targeting a specific player. Teams may be more willing to trade back if a player they like is still expected to be on the board, or may be willing to "overpay" with future draft picks if they really want a specific player and don't want to risk another team drafting him. Additionally, this does not specifically model player projections on the incoming 2026 rookies, so the above player outcome percentages may be impacted by that too. 
 
