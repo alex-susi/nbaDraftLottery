@@ -6,9 +6,9 @@
 [![License](https://img.shields.io/badge/License-ADD%20LICENSE-lightgrey)](LICENSE)
 
 
-## Overview
+## 01 - Overview
 
-This project estimates how the **[NBA's new 3-2-1 Draft Lottery](https://www.nba.com/news/nba-board-governors-approve-new-draft-lottery-system)** will impact the value, risk, and trade utility of every future draft pick from 2026–2032. Rather than assigning each pick a single value, the model simulates future team strength, lottery outcomes, pick protections, swaps, conveyance rules, and player-outcome uncertainty. The result is a distribution of possible values for every pick, team portfolio, and hypothetical trade.
+This project estimates how the **[NBA's new 3-2-1 Draft Lottery](https://www.nba.com/news/nba-board-governors-approve-new-draft-lottery-system)** will impact the value, risk, and trade utility of every tradeable draft pick from 2026–2032. Rather than assigning each pick a single value, the model simulates future team strength, lottery outcomes, pick protections, swaps, conveyance rules, and player-outcome uncertainty. The result is a distribution of possible values for every pick, team portfolio, and hypothetical trade.
 
 The **[Interactive Dashboard](https://alexsusi2298.shinyapps.io/nbaDraftLottery/)** includes team-level portfolio views, individual pick distributions, lottery odds, pick movers, and a trade machine to evaluate hypothetical pick deals.
 
@@ -16,7 +16,7 @@ The **[Interactive Dashboard](https://alexsusi2298.shinyapps.io/nbaDraftLottery/
 
 <br>
 
-## Dashboard Preview
+## 02 - Dashboard Preview
 
 | Tab            | Use case                                                                     |
 | -------------- | ---------------------------------------------------------------------------- |
@@ -28,33 +28,34 @@ The **[Interactive Dashboard](https://alexsusi2298.shinyapps.io/nbaDraftLottery/
 
 
 <details>
-<summary><h3>Preview Screenshots</h3></summary>
+<summary><h3>Dashboard Screenshots</h3></summary>
 
-### Total EPV Leaderboard
+Total EPV Leaderboard
 
 ![Total EPV leaderboard with dumbbell plots](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/epv_leaderboard.png)
 
-### Pick Landscape
+Pick Landscape
 
-![Pick landscape scatterplot](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/epv_leaderboard.png)
+![Pick landscape scatterplot](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/pick_landscape.png)
 
-### Team Portfolio View
+Team Portfolio View
 
-![Team portfolio summary](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/epv_leaderboard.png)
+![Team portfolio summary](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/nets.png)
 
-### Single Pick Distribution
+Single Pick Distribution
 
-![Single pick distribution](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/epv_leaderboard.png)
+![Single pick distribution](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/single_pick.png)
 
-### Trade Machine
+Trade Machine
 
-![Trade machine pick valuation](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/epv_leaderboard.png)
+![Trade machine pick valuation](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/trademachine1.png)
+![Trade machine pick valuation](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/trademachine2.png)
 
 </details>
 
 <br>
 
-## Key Findings
+## 03 - Key Findings
 
 1. There's a lot of uncertainty in projecting future expected pick value. Between the difficulty of predicting team performances and the increased randomness of the draft lottery, many indiviudal picks and total team portfolios show small changes in expected value.
 
@@ -64,11 +65,10 @@ The **[Interactive Dashboard](https://alexsusi2298.shinyapps.io/nbaDraftLottery/
 
 4. The largest increases in single-pick EPV are Miami's top-14 protected 2027 first round pick (+1.1 EPV) and Brooklyn's less favorable 2027 first round pick between their own and Houston's (+0.7 EPV). 
 
-5. **[Finding 5]**
 
 <br>
 
-## Methodology
+## 04 - Methodology
 
 1. **Draft Pick Value Curves**
 
@@ -621,6 +621,12 @@ generated quantities {
 
 <br>
 
+### Draft Pick Value Curve
+
+![Draft Pick Value Curve](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/pick_curve.png)
+
+<br>
+
 ### Team-Strength Model
 
 A Bayesian Markov chain over all 30 league-wide standing positions. The five 3-2-1 lottery tiers are then derived from the simulated rank:
@@ -789,7 +795,7 @@ generated quantities {
 
 To project future pick values, the simulation:
 
-1. Seeds each team in its actual 2025–26 tier.
+1. Seeds each team in its actual 2025–26 lottery tier.
 2. Evolves team tiers year by year using posterior draws from the Markov transition model.
 3. Orders teams within tiers to construct future lottery seeds.
 4. Runs both the current lottery and the new 3-2-1 lottery.
@@ -799,7 +805,7 @@ To project future pick values, the simulation:
    * 12th-pick floor for relegated teams
    * No consecutive No. 1 overall picks
    * No three straight top-5 picks
-   * No newly traded top-12 through top-15 protections
+   
 6. Applies public pick obligations:
 
    * Outright traded picks
@@ -807,13 +813,13 @@ To project future pick values, the simulation:
    * Conveyance conditions
    * Swap rights
    * Return legs
-   * Multi-team ranked pools
+   
 7. Values every owned pick under each simulated outcome.
 8. Aggregates pick-level draws into team portfolios, single-pick summaries, pick-mover tables, and trade-machine outputs.
 
 <br>
 
-## Model Validation Summary
+## 05 - Model Validation Summary
 
 The production models were evaluated with sampler diagnostics, posterior predictive checks, PSIS-LOO, Markov transition-code checks, lottery simulator validation, and simulation-based calibration where computationally feasible.
 
@@ -848,55 +854,40 @@ Additional validation checks include:
 
 <br>
 
-## Example Decision Case Study
+## 06 - Example Trade Case Study
 
-### Memphis Trades Down Twice in the 2026 First Round
+### Memphis Trades Down
 
 During the first round of the 2026 NBA Draft, [Memphis traded down twice](https://www.nba.com/news/2026-offseason-trade-tracker):
 
-1. **Memphis → Oklahoma City:** Memphis moved from **No. 16** to **No. 17** and received **two future second-round picks**.
-2. **Memphis → Detroit:** Memphis then moved from **No. 17** to **No. 21** and received **three additional future second-round picks**.
+1. **Memphis → Oklahoma City:** Memphis moved from **No. 16** to **No. 17** and received **two future second-round picks** from OKC.
+2. **Memphis → Detroit:** Memphis then moved from **No. 17** to **No. 21** and received **three additional future second-round picks** from Detroit.
 
-The combined result: Memphis moved from **No. 16 to No. 21** and accumulated **five future second-round picks**.
+For purposes of this case study, we will analyze the initial Memphis/OKC deal.
 
-This is a useful case study because it mirrors the exact type of question the dashboard is designed to answer:
+The Trade Machine can be used to analyze 3 different questions for this transaction:
 
-> How much value does a team give up by moving down a few slots in the first round, and how many future second-round picks are needed to make the trade fair?
+> How much value does a team give up by moving down a few slots in the first round?
 
-### How the Trade Machine Can Analyze It
+> Which team is more likely to receive more total production from players drafted with the traded picks?
 
-The trade can be evaluated three ways:
+> Which team is more likely to receive the single best player from the traded picks?
 
-| Scenario           | Memphis gives up |          Memphis receives | Question                                                                      |
-| ------------------ | ---------------: | ------------------------: | ----------------------------------------------------------------------------- |
-| OKC trade only     |           No. 16 | No. 17 + 2 future seconds | Did two seconds compensate Memphis for moving down one slot?                  |
-| Detroit trade only |           No. 17 | No. 21 + 3 future seconds | Did three seconds compensate Memphis for moving down four slots?              |
-| Combined sequence  |           No. 16 | No. 21 + 5 future seconds | Did Memphis gain enough future draft value to justify moving down five slots? |
+### Using the Trade Machine
 
-### Model Output Placeholder
+![Memphis-OKC Trade](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/mem_okc1.png)
+![Memphis-OKC Trade](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/mem_okc2.png)
 
-Replace this table with dashboard results once the exact future second-round picks are encoded.
 
-| Trade                       | Memphis EPV Sent | Memphis EPV Received | Net EPV | 90% Credible Interval | Probability Memphis Gains Value |
-| --------------------------- | ---------------: | -------------------: | ------: | --------------------: | ------------------------------: |
-| No. 16 → No. 17 + 2 seconds |            `7.6` |                `[x]` |   `[x]` |              `[x, x]` |                          `[x%]` |
-| No. 17 → No. 21 + 3 seconds |            `[x]` |                `[x]` |   `[x]` |              `[x, x]` |                          `[x%]` |
-| No. 16 → No. 21 + 5 seconds |            `[x]` |                `[x]` |   `[x]` |              `[x, x]` |                          `[x%]` |
+### Trade Analysis
 
-| Asset                       | Receiving Team | EPV | 90% EPV |
-| --------------------------- | ---------------: | -------------------: | ------: | 
-| 2026 #16 |            OKC |                `7.6` |   `[7.1, 8.1]` |    
-| 2026 #17 |            Memphis |                `7.4` |   `[6.9, 7.9]` | 
-| 2029 Second Round Pick |            Memphis |                `2.3` |   `[1.2, 3.8]` | 
-| 2029 Second Round Pick |            Memphis |                `2.4` |   `[1.2, 3.9]` | 
+On paper, this good business for Memphis. The expected value lost from moving down only 1 draft slot is more than compensated for by picking up 2 future second round picks, noted by the 100% higher EPV to Memphis. However, Memphis is not guaranteed to get more productivity out of the players selected with these picks, but the model favors them with about a 64% chance. The trade machine also likes Memphis' chances to get the single-most productive player with the picks involved in this deal, at about a 59% rate. 
 
-### Basketball Interpretation Placeholder
-
-`[Add interpretation after running the trade machine. Example: If the combined sequence is close to fair by EPV but has wider uncertainty, Memphis effectively exchanged one more certain first-round outcome for a diversified basket of lower-probability future outcomes. If the model shows Memphis gained value, the deal can be framed as monetizing a relatively flat section of the first-round pick curve. If the model shows Memphis lost value, the future seconds may not fully compensate for the drop from mid-first to late-first expected value.]`
+An important caveat here is that deals like this one that occur live during the draft are almost always done when a team is targeting a specific player. Teams may be more willing to trade back if a player they like is stil expected to be on the board, or may be willing to "overpay" with future draft picks if they really want a specific player and don't want to risk another team drafting him. Additionally, this does not specifically model player projections on the incoming 2026 rookies, so the above player outcome percentages may be impacted by that too. 
 
 <br>
 
-## Glossary
+## 07 - Glossary
 
 | Term                        | Meaning                                                                                                                                                                   |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -912,7 +903,7 @@ Replace this table with dashboard results once the exact future second-round pic
 
 <br>
 
-## Repo Structure
+## 08 - Repo Structure
 
 | File                    | Purpose                                                                     |
 | ----------------------- | --------------------------------------------------------------------------- |
@@ -928,7 +919,7 @@ Replace this table with dashboard results once the exact future second-round pic
 
 <br>
 
-## Running the Project
+## 09 - Running the Project
 
 There are two ways to run the project.
 
@@ -942,7 +933,7 @@ install.packages(c("tidyverse", "shiny", "plotly", "DT", "bslib", "igraph"))
 shiny::runApp("app.R")
 ```
 
-This assumes the repo includes a precomputed `dashboard_data.rds` file in the expected location.
+This assumes the repo includes a precomputed `dashboard_data.rds` file in the expected location. Note that `dashboard_data.rds` is available for download in the `01_data` folder.
 
 Depending on the local file structure, the app looks for:
 
@@ -983,7 +974,7 @@ Validation outputs are written to:
 
 <br>
 
-## Limitations and Future Work
+## 10 - Limitations and Future Work
 
 * **No time discounting yet.** A 2031 pick and a 2027 pick of equal EPV are treated equally.
 * **No surplus value yet.** Production is not netted against rookie-scale salary.
@@ -996,7 +987,7 @@ Validation outputs are written to:
 
 <br>
 
-## References
+## 11 - References
 
 This project builds on the draft-value-curve lineage from:
 
