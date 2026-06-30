@@ -6,9 +6,9 @@
 [![License](https://img.shields.io/badge/License-ADD%20LICENSE-lightgrey)](LICENSE)
 
 
-## Overview
+## 01 - Overview
 
-This project estimates how the **[NBA's new 3-2-1 Draft Lottery](https://www.nba.com/news/nba-board-governors-approve-new-draft-lottery-system)** will impact the value, risk, and trade utility of every future draft pick from 2026–2032. Rather than assigning each pick a single value, the model simulates future team strength, lottery outcomes, pick protections, swaps, conveyance rules, and player-outcome uncertainty. The result is a distribution of possible values for every pick, team portfolio, and hypothetical trade.
+This project estimates how the **[NBA's new 3-2-1 Draft Lottery](https://www.nba.com/news/nba-board-governors-approve-new-draft-lottery-system)** will impact the value, risk, and trade utility of every tradeable draft pick from 2026–2032. Rather than assigning each pick a single value, the model simulates future team strength, lottery outcomes, pick protections, swaps, conveyance rules, and player-outcome uncertainty. The result is a distribution of possible values for every pick, team portfolio, and hypothetical trade.
 
 The **[Interactive Dashboard](https://alexsusi2298.shinyapps.io/nbaDraftLottery/)** includes team-level portfolio views, individual pick distributions, lottery odds, pick movers, and a trade machine to evaluate hypothetical pick deals.
 
@@ -16,7 +16,7 @@ The **[Interactive Dashboard](https://alexsusi2298.shinyapps.io/nbaDraftLottery/
 
 <br>
 
-## Dashboard Preview
+## 02 - Dashboard Preview
 
 | Tab            | Use case                                                                     |
 | -------------- | ---------------------------------------------------------------------------- |
@@ -24,143 +24,89 @@ The **[Interactive Dashboard](https://alexsusi2298.shinyapps.io/nbaDraftLottery/
 | Team Summaries | Impact of the 3-2-1 Lottery on each team's pick portfolio, including a summary of the most affected picks |
 | Single Pick    | Distribution of outcomes for one pick                    |
 | Trade Machine  | Evaluate a real or hypothetical transaction          |
-| Methodology    | Model validation, transition matrix, and pick-value curves                   |
+| Methodology    | Model validation, transition matrix, and Pick Value Curve                   |
 
-> Replace the placeholder image paths below with screenshots from the dashboard. Recommended location: `docs/images/`.
 
-### Total EPV Leaderboard / Dumbbell Plot
+<details>
+<summary><h3>Dashboard Screenshots</h3></summary>
 
-![Total EPV leaderboard with dumbbell plots](docs/images/total-epv-leaderboard-dumbbell.png)
+Total EPV Leaderboard
 
-### Pick Landscape
+![Total EPV leaderboard with dumbbell plots](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/epv_leaderboard.png)
 
-![Pick landscape scatterplot](docs/images/pick-landscape-scatterplot.png)
+Pick Landscape
 
-### Team Portfolio View
+![Pick landscape scatterplot](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/pick_landscape.png)
 
-![Team portfolio summary](docs/images/team-portfolio-summary.png)
+Team Portfolio View
 
-### Single Pick Distribution
+![Team portfolio summary](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/nets.png)
 
-![Single pick distribution](docs/images/single-pick-distribution.png)
+Single Pick Distribution
 
-### Trade Machine
+![Single pick distribution](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/single_pick.png)
 
-![Trade machine pick valuation](docs/images/trade-machine.png)
+Trade Machine
 
-### Methodology / Validation View
+![Trade machine pick valuation](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/trademachine1.png)
+![Trade machine pick valuation](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/trademachine2.png)
 
-![Methodology and validation dashboard](docs/images/methodology-validation.png)
-
-<br>
-
-## Key Findings
-
-1. **[Finding 1]**
-
-2. **[Finding 2]**
-
-3. **[Finding 3]**
-
-4. **[Finding 4]**
-
-5. **[Finding 5]**
+</details>
 
 <br>
 
-## Example Decision Case Study
+## 03 - Key Findings
 
-### Memphis Trades Down Twice in the 2026 First Round
+1. There's a lot of uncertainty in projecting future expected pick value. Between the difficulty of predicting team performances and the increased randomness of the draft lottery, many indiviudal picks and total team portfolios show small changes in expected value.
 
-During the first round of the 2026 NBA Draft, Memphis traded down twice:
+2. In the long run (7 years in this case, since that's the furthest out draft picks can be traded), team performance expectations converge towards league-average (15th). As such, there is also a convergence of expected value for distant draft picks. For first-round picks, the EPV converges to around 9.2, and around 2.5 for second-round picks.
 
-1. **Memphis → Oklahoma City:** Memphis moved from **No. 16** to **No. 17** and received **two future second-round picks**.
-2. **Memphis → Detroit:** Memphis then moved from **No. 17** to **No. 21** and received **three additional future second-round picks**.
+3. The largest decreases in single-pick EPV are Memphis' 2027 first round most-favorable selection of Utah, Cleveland, and Minnesota (-1.8 EPV due to Utah's pick being ineligible to land in the top 5) and Washington's own 2027 first round pick (-1.6 EPV as it cannot land #1 overall in consecutive years).
 
-The combined result: Memphis moved from **No. 16 to No. 21** and accumulated **five future second-round picks**.
+4. The largest increases in single-pick EPV are Miami's top-14 protected 2027 first round pick (+1.1 EPV) and Brooklyn's less favorable 2027 first round pick between their own and Houston's (+0.7 EPV). 
 
-Sources: [NBA 2026 Offseason Trade Tracker](https://www.nba.com/news/2026-offseason-trade-tracker), [Reuters recap](https://www.reuters.com/sports/grizzlies-trade-back-twice-first-round-draft-karim-lopez--flm-2026-06-24/)
-
-This is a useful case study because it mirrors the exact type of question the dashboard is designed to answer:
-
-> How much value does a team give up by moving down a few slots in the first round, and how many future second-round picks are needed to make the trade fair?
-
-### How the Trade Machine Can Analyze It
-
-The trade can be evaluated three ways:
-
-| Scenario           | Memphis gives up |          Memphis receives | Question                                                                      |
-| ------------------ | ---------------: | ------------------------: | ----------------------------------------------------------------------------- |
-| OKC trade only     |           No. 16 | No. 17 + 2 future seconds | Did two seconds compensate Memphis for moving down one slot?                  |
-| Detroit trade only |           No. 17 | No. 21 + 3 future seconds | Did three seconds compensate Memphis for moving down four slots?              |
-| Combined sequence  |           No. 16 | No. 21 + 5 future seconds | Did Memphis gain enough future draft value to justify moving down five slots? |
-
-### Model Output Placeholder
-
-Replace this table with dashboard results once the exact future second-round picks are encoded.
-
-| Trade                       | Memphis EPV Sent | Memphis EPV Received | Net EPV | 90% Credible Interval | Probability Memphis Gains Value |
-| --------------------------- | ---------------: | -------------------: | ------: | --------------------: | ------------------------------: |
-| No. 16 → No. 17 + 2 seconds |            `[x]` |                `[x]` |   `[x]` |              `[x, x]` |                          `[x%]` |
-| No. 17 → No. 21 + 3 seconds |            `[x]` |                `[x]` |   `[x]` |              `[x, x]` |                          `[x%]` |
-| No. 16 → No. 21 + 5 seconds |            `[x]` |                `[x]` |   `[x]` |              `[x, x]` |                          `[x%]` |
-
-### Basketball Interpretation Placeholder
-
-`[Add interpretation after running the trade machine. Example: If the combined sequence is close to fair by EPV but has wider uncertainty, Memphis effectively exchanged one more certain first-round outcome for a diversified basket of lower-probability future outcomes. If the model shows Memphis gained value, the deal can be framed as monetizing a relatively flat section of the first-round pick curve. If the model shows Memphis lost value, the future seconds may not fully compensate for the drop from mid-first to late-first expected value.]`
 
 <br>
 
+## 04 - Methodology
 
+1. **Draft Pick Value Curves**
 
-## Methodology
+   * First-round picks are modeled with a Bayesian Student-t regression on draft slot.
+   * Second-round picks are modeled separately using a hurdle model because many second-rounders never appear in an NBA game.
 
-1. **Draft pick value curves**
+2. **Projecting Future Team Performance**
 
-   * Round 1 picks are modeled with a Bayesian Student-t regression on draft slot.
-   * Round 2 picks are modeled separately using a hurdle model because many second-rounders never appear in an NBA game.
+   * Markov chain model used to simulate future standings, where a team's standing in Year `t+1` is dependent on the team's standing in year `t`.
 
-2. **Team Strength simulation**
+3. **Lottery Simulation**
 
-   * Teams move through five 3-2-1 lottery tiers using a Bayesian Markov transition model.
-
-3. **Lottery simulation**
-
-   * For 2027-2032, a Monte Carlo simulation projects future team tiers, and runs both the current lottery and the new 3-2-1 system.
-   * It applies relegation-tier ball counts, the 12th-pick floor, no consecutive No. 1 picks, no three straight top-5 picks, and the ban on newly traded top-12 through top-15 protections.
-   * The simulation applies public future pick obligations, protections, swaps, conveyance rules, return legs, and conditional structures.
+   * For 2027-2032, a Monte Carlo simulation projects future team standings, and runs both the current lottery and the new 3-2-1 system.
+   * It applies the appropriate number of lottery balls based on tier, the 12th-pick floor, no consecutive No. 1 picks, no three straight top-5 picks, and the ban on newly traded top-12 through top-15 protections.
+   * The simulation applies future pick obligations, protections, swaps, conveyance rules, return legs, and conditional structures.
    * The trade machine evaluates hypothetical pick packages using correlated simulation draws, so team trajectories and pick outcomes remain internally consistent.
 
-**Pick value target:** first-four-year Win Shares, abbreviated **4-YR WS**. This approximates the rookie-scale, cost-controlled window and is scraped from Basketball-Reference draft classes from 1985–2021.
-
-The project uses three Stan models:
-
-1. `picks_Round1.stan`
-2. `picks_Round2.stan`
-3. `team_strength.stan`
-
-A Monte Carlo simulation then projects future team tiers, runs both lottery systems, applies protections and swaps, and values every owned pick under each system.
 
 <br>
 
-### Pick Value Target
+### Draft Pick Value Curve Outcome Variable
 
-The core player outcome is:
+The core player outcome is first-four-year [Win Shares](https://www.basketball-reference.com/about/ws.html), a player statistic which attempts to divvy up credit for team success to the individuals on the team. First four years were chosen to cover the length of the cost-controlled rookie-scale contracts. Win Share data scraped from Basketball-Reference draft classes from 1985–2021.
 
 $$\text{4-YR WS}_n = \text{Win Shares accumulated by player } n \text{ over his first four NBA seasons}$$
 
-The model distinguishes between:
+The Draft Pick Value Curve distinguishes between:
 
-* **Expected Pick Value (EPV):** the posterior mean value of a pick slot before knowing the drafted player.
-* **Realized player outcomes:** simulated player-level outcomes around the pick curve, including busts, rotation players, and rare star outcomes.
+* **Expected Pick Value (EPV):** the posterior mean value of a draft pick before knowing the drafted player.
+* **4-Yr WS Outcomes:** simulated player-level outcomes around the pick curve.
 
-This distinction matters because a pick can have lower expected value but still have meaningful upside in realized player-outcome simulations.
+While higher draft picks have greater EPV, that does not guarantee that players picked higher will perform better than players drafted after them. For instance, the 1st pick in a draft is always a more valuable asset than the 3rd pick in the same draft, but that does not guarantee that the player selected with the 1st pick will be better than the player selected 3rd.
 
 <br>
 
 ### First Round Pick Model
 
-A regression of first-four-year Win Shares on draft slot. The mean follows a power-law decay in pick number, and per-slot residual variance is smoothed across adjacent picks by a Gaussian random walk on the log scale. The Student-t likelihood accommodates the heavy tails of draft outcomes (superstars and busts) without the mean curve being distorted by outliers.
+A regression of 4-YR WS on draft slot. The mean follows a power-law decay in pick number, and per-slot residual variance is smoothed across adjacent picks by a Gaussian random walk on the log scale. The Student-t likelihood accommodates the heavy tails of draft outcomes (superstars and busts) without the mean curve being distorted by outliers.
 
 | Parameter  | Description                                                                                                                                              |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -334,14 +280,14 @@ generated quantities {
 
 ### Second Round Pick Model
 
-Second-round picks violate the first-round model because the modal career outcome is *zero* NBA value. Unlike first-round picks, second-round picks frequently sign non-guaranteed contracts, spend significant time in the G League, or return to play overseas before ever appearing in an NBA game.
+Unlike first-round picks, second-round picks frequently sign non-guaranteed contracts, spend significant time in the G League, or return to play overseas before ever appearing in an NBA game.
 
-The valuation is therefore a two-part **hurdle**:
+The second round model is therefore a two-part **hurdle**:
 
-1. A Bernoulli model for whether the player logs any NBA minutes.
-2. A shifted right-skewed lognormal mixture for outcomes conditional on playing.
+1. A Bernoulli model for whether the player drafted in a given slot logs any NBA minutes.
+2. A shifted right-skewed lognormal mixture for player outcomes conditional on playing.
 
-A pick-declining mixture weight allows for the rare second-round star without inflating the typical-pick curve. The play probability $\pi_p$, typical median $m_p$, and dispersion $s_p$ each follow their own adjacent-pick random walk with drift, borrowing strength across neighboring second-round slots exactly as in the round-one variance model.
+A pick-declining mixture weight allows for the rare second-round star without inflating the typical-pick curve. The play probability $\pi_p$, typical median $m_p$, and dispersion $s_p$ each follow their own adjacent-pick random walk with drift, borrowing strength across neighboring slots in a similar manner to the first-round pick model.
 
 
 | Parameter                       | Description                                                                                                                             |
@@ -675,17 +621,57 @@ generated quantities {
 
 <br>
 
+### Draft Pick Value Curve
+
+![Draft Pick Value Curve](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/pick_curve.png)
+
+<br>
+
 ### Team-Strength Model
 
-A first-order Markov chain over the five 3-2-1 lottery tiers. The states are chosen to match the lottery's seeding mechanism: the tier a team occupies in season $t$ determines its ball count, so modeling tier-to-tier movement maps directly onto how each team's pick is seeded in future drafts.
+A Bayesian Markov chain over all 30 league-wide standing positions. The five 3-2-1 lottery tiers are then derived from the simulated rank:
 
-Each row of the transition matrix receives a Dirichlet prior whose concentrations encode tier adjacency. Staying put or moving one tier is a priori more likely than leaping across the standings. Dirichlet-Multinomial conjugacy yields the closed-form posterior $\text{Dirichlet}(\alpha_{i\cdot} + \text{counts}_{i\cdot})$, computed in R as a cross-check, while Stan provides MCMC diagnostics and posterior draws for the downstream simulation.
+| Rank range | 3-2-1 tier |
+|---:|---|
+| 1–3 | Relegation |
+| 4–10 | Non-play-in |
+| 11–14 | Play-in 9/10 seed |
+| 15–16 | Play-in 7/8 loser |
+| 17–30 | Playoff |
 
-| Parameter            | Description                                                                                                         |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| $\theta_{i\cdot}$    | The $i$-th row of the $5\times5$ transition matrix; a simplex giving $P(\text{tier}_{t+1}=j \mid \text{tier}_t=i)$  |
-| $\text{counts}_{ij}$ | Observed historical count of season-over-season transitions $i \to j$ from 2005–2026 standings                      |
-| $\alpha_{ij}$        | Dirichlet prior concentration: largest on the diagonal, smaller for adjacent tiers, and decaying with tier distance |
+Note that this is an imperfect mapping to the lottery tiers, as it does not account for within-conference seeding, nor does it simulate play-in game outcomes. 
+
+The model estimates a $30 \times 30$ transition matrix:
+
+$$
+\theta_{i\cdot} = P(\text{rank}_{t+1} = j \mid \text{rank}_t = i)
+$$
+
+where each row gives the probability distribution over next-season ranks for a team currently in rank state $i$.
+
+Rather than using a Dirichlet prior for each row independently, `team_strength_v3.stan` uses a **smoothed softmax transition surface**. The transition logits combine:
+
+1. A global destination-rank baseline, capturing which future ranks are generally more or less common.
+2. A distance penalty, favoring movement to nearby ranks over large jumps.
+3. A local deviation surface, smoothed across adjacent current ranks and adjacent future ranks.
+
+
+| Parameter / Quantity | Description |
+|---|---|
+| $K$ | Number of rank states ($K = 30$). |
+| $\text{counts}_{ij}$ | Observed historical count of season-over-season transitions from rank $i$ to rank $j$. |
+| $\theta_{i\cdot}$ | The $i$-th row of the $30 \times 30$ transition matrix; a simplex giving next-season rank probabilities. |
+| $\eta_{ij}$ | Transition logit for moving from current rank $i$ to future rank $j$, centered within each row for softmax identification. |
+| $b_j$ | Centered global destination-rank baseline. This captures ranks that are generally more or less common as future destinations. |
+| $\epsilon_{ij}$ | Local transition-logit deviation for the specific current-rank / future-rank pair. |
+| $\lambda$ | Distance slope. This is constrained to be non-positive, so larger absolute rank jumps are penalized unless the data strongly support them. |
+| `eta_scale` | Fixed scale controlling the marginal size of local transition-logit deviations. Supplied by the R pipeline. |
+| `row_smooth_scale` | Fixed smoothing scale across adjacent current-rank rows. Supplied by the R pipeline. |
+| `col_smooth_scale` | Fixed smoothing scale across adjacent future-rank columns. Supplied by the R pipeline. |
+| `dest_scale` | Fixed scale controlling the size of the global destination-rank baseline. Supplied by the R pipeline. |
+| `counts_rep` | Posterior predictive replicated transition counts used for model checking. |
+| `row_entropy` | Entropy of each transition row, used to summarize how concentrated or diffuse each current-rank transition distribution is. |
+
 
 <details>
 <summary><h3><code>team_strength_v3.stan</code></h3></summary>
@@ -809,7 +795,7 @@ generated quantities {
 
 To project future pick values, the simulation:
 
-1. Seeds each team in its actual 2025–26 tier.
+1. Seeds each team in its actual 2025–26 lottery tier.
 2. Evolves team tiers year by year using posterior draws from the Markov transition model.
 3. Orders teams within tiers to construct future lottery seeds.
 4. Runs both the current lottery and the new 3-2-1 lottery.
@@ -819,7 +805,7 @@ To project future pick values, the simulation:
    * 12th-pick floor for relegated teams
    * No consecutive No. 1 overall picks
    * No three straight top-5 picks
-   * No newly traded top-12 through top-15 protections
+   
 6. Applies public pick obligations:
 
    * Outright traded picks
@@ -827,13 +813,13 @@ To project future pick values, the simulation:
    * Conveyance conditions
    * Swap rights
    * Return legs
-   * Multi-team ranked pools
+   
 7. Values every owned pick under each simulated outcome.
 8. Aggregates pick-level draws into team portfolios, single-pick summaries, pick-mover tables, and trade-machine outputs.
 
 <br>
 
-## Model Validation Summary
+## 05 - Model Validation Summary
 
 The production models were evaluated with sampler diagnostics, posterior predictive checks, PSIS-LOO, Markov transition-code checks, lottery simulator validation, and simulation-based calibration where computationally feasible.
 
@@ -868,40 +854,72 @@ Additional validation checks include:
 
 <br>
 
-## Glossary
+## 06 - Example Trade Case Study
+
+### Memphis Trades Down
+
+During the first round of the 2026 NBA Draft, [Memphis traded down twice](https://www.nba.com/news/2026-offseason-trade-tracker):
+
+1. **Memphis → Oklahoma City:** Memphis moved from **No. 16** to **No. 17** and received **two future second-round picks** from OKC.
+2. **Memphis → Detroit:** Memphis then moved from **No. 17** to **No. 21** and received **three additional future second-round picks** from Detroit.
+
+For purposes of this case study, we will analyze the initial Memphis/OKC deal.
+
+The Trade Machine can be used to analyze 3 different questions for this transaction:
+
+> How much value does a team give up by moving down a few slots in the first round?
+
+> Which team is more likely to receive more total production from players drafted with the traded picks?
+
+> Which team is more likely to receive the single best player from the traded picks?
+
+### Using the Trade Machine
+
+![Memphis-OKC Trade](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/mem_okc1.png)
+![Memphis-OKC Trade](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/mem_okc2.png)
+
+
+### Trade Analysis
+
+On paper, this good business for Memphis. The expected value lost from moving down only 1 draft slot is more than compensated for by picking up 2 future second round picks, noted by the 100% higher EPV to Memphis. However, Memphis is not guaranteed to get more productivity out of the players selected with these picks, but the model favors them with about a 64% chance. The trade machine also likes Memphis' chances to get the single-most productive player with the picks involved in this deal, at about a 59% rate. 
+
+An important caveat here is that deals like this one that occur live during the draft are almost always done when a team is targeting a specific player. Teams may be more willing to trade back if a player they like is stil expected to be on the board, or may be willing to "overpay" with future draft picks if they really want a specific player and don't want to risk another team drafting him. Additionally, this does not specifically model player projections on the incoming 2026 rookies, so the above player outcome percentages may be impacted by that too. 
+
+<br>
+
+## 07 - Glossary
 
 | Term                        | Meaning                                                                                                                                                                   |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **EPV**                     | Expected Pick Value. The posterior expected value of a pick or pick package before knowing the drafted player.                                                            |
-| **4-YR WS**                 | First-four-year Win Shares. The player-production target used to value draft outcomes during the rookie-scale window.                                                     |
+| **EPV**                     | Expected Pick Value. The posterior expected value of a draft pick before knowing the drafted player.                                                            |
+| **4-YR WS**                 | First-four-year Win Shares. The player metric used to value draft outcomes during the rookie-scale contract.                                                     |
 | **Credible interval**       | Bayesian uncertainty interval. A 90% credible interval means 90% of posterior draws fall inside that range.                                                               |
 | **Conveyance**              | Whether a traded pick is actually delivered to the receiving team after applying protections and conditions.                                                              |
 | **Protection**              | A restriction on a traded pick, usually allowing the original team to keep the pick if it lands in a specified range. Example: top-4 protected.                           |
 | **Swap right**              | The right for one team to exchange its pick with another team's pick, usually taking the more favorable slot.                                                             |
-| **Upside component**        | In the round-two model, the rare high-outcome mixture component that captures second-round stars without inflating the typical expected value of every second-round pick. |
+| **Upside component**        | In the round-two model, the mixture component that captures rare second-round star outcomes without inflating the typical expected value of every second-round pick. |
 | **Relegation tier**         | The bottom three teams under the 3-2-1 structure. They receive two lottery balls each and cannot pick worse than 12th.                                                    |
-| **Expected asset value**    | Pick value using the posterior mean value of the simulated draft slot. This is the cleaner trade-value metric.                                                            |
-| **Realized player outcome** | Simulated player-level outcome around the pick curve. This captures the uncertainty that a lower pick can still become a star or a higher pick can bust.                  |
+
 
 <br>
 
-## Repo Structure
+## 08 - Repo Structure
 
 | File                    | Purpose                                                                     |
 | ----------------------- | --------------------------------------------------------------------------- |
 | `01_data.R`             | Scrape standings, rosters, draft production; build Markov transition counts |
 | `02_picks.R`            | Pick ownership, protections, swaps for 2026–2032                            |
 | `03_models.R`           | Fit all three Stan models and run LOO comparison                            |
-| `04_lotterySims.R`      | Monte Carlo lottery + valuation engine                                      |
-| `05_model_validation.R` | Standalone SBC / LOO / PPC validation                                       |
-| `picks_Round1.stan`     | Round 1 Student-t / random-walk sigma curve                                 |
-| `picks_Round2.stan`     | Round 2 hurdle model                                                        |
-| `team_strength.stan`    | Tier-transition Markov chain                                                |
-| `app.R`                 | Shiny dashboard + trade machine                                             |
+| `04_lotterySims.R`      | Monte Carlo lottery simulation                                              |
+| `05_model_validation.R` | SBC / LOO / PPC model validation                                            |
+| `picks_Round1.stan`     | First-round pick model                                 |
+| `picks_Round2.stan`     | Second-round pick model                                                        |
+| `team_strength.stan`    | Markov chain model                                                |
+| `app.R`                 | R Shiny dashboard                                                           |
 
 <br>
 
-## Running the Project
+## 09 - Running the Project
 
 There are two ways to run the project.
 
@@ -910,14 +928,12 @@ There are two ways to run the project.
 Use this path if you only want to launch the Shiny app without re-scraping data or re-fitting Stan models.
 
 ```r
-install.packages(c(
-  "tidyverse", "shiny", "plotly", "DT", "bslib", "igraph"
-))
+install.packages(c("tidyverse", "shiny", "plotly", "DT", "bslib", "igraph"))
 
 shiny::runApp("app.R")
 ```
 
-This assumes the repo includes a precomputed `dashboard_data.rds` file in the expected location.
+This assumes the repo includes a precomputed `dashboard_data.rds` file in the expected location. Note that `dashboard_data.rds` is available for download in the `01_data` folder.
 
 Depending on the local file structure, the app looks for:
 
@@ -931,11 +947,9 @@ dashboard_data.rds
 Use this path to fully rebuild the data, refit Stan models, rerun lottery simulations, and regenerate `dashboard_data.rds`.
 
 ```r
-install.packages(c(
-  "tidyverse", "hoopR", "rvest", "httr", "cmdstanr",
-  "janitor", "posterior", "expm", "loo",
-  "shiny", "plotly", "DT", "bslib", "igraph"
-))
+install.packages(c("tidyverse", "hoopR", "rvest", "httr", "cmdstanr",
+                   "janitor", "posterior", "expm", "loo",
+                   "shiny", "plotly", "DT", "bslib", "igraph"))
 
 cmdstanr::install_cmdstan()
 
@@ -960,20 +974,20 @@ Validation outputs are written to:
 
 <br>
 
-## Limitations and Future Work
+## 10 - Limitations and Future Work
 
 * **No time discounting yet.** A 2031 pick and a 2027 pick of equal EPV are treated equally.
 * **No surplus value yet.** Production is not netted against rookie-scale salary.
-* **Team projections are intentionally simple.** The Markov model does not yet account for age, roster continuity, salary cap space, draft capital, injuries, market size, player development, or front-office strategy.
-* **Historical team behavior may not fully generalize.** Team projections are constructed using historical seasons that operated under the old lottery rules. The new 3-2-1 incentives may change behavior in ways that historical data cannot fully identify.
+* **Team projections are intentionally simple.** The Markov model does not yet account for age, roster continuity, salary cap space, draft capital, injuries, market size, player development, or front-office strategy. Future versions might explore this, as well as higher-order Markov chain models.
+* **Historical team behavior may not generalize.** Team projections are constructed using historical seasons that operated under the old lottery format and CBA rules. The new 3-2-1 lottery may incentivize team behavior changes in ways that historical data cannot fully identify.
 * **Deeply nested swap chains are approximated.** Publicly reported multi-team pick obligations can be ambiguous or conditional in ways that require close approximations.
-* **Win Shares is imperfect.** Future versions may explore EPM, RAPTOR, xRAPM, DARKO, BPM, or salary-adjusted surplus value.
-* **No player/prospect covariates yet.** The current model values picks by slot and team/pick context, not by prospect-specific information.
-* **Future second-round pick details can be incomplete.** Some reported trades do not immediately disclose the exact years or conditions of second-round picks.
+* **Win Shares is imperfect.** Because of how the metric is calculated, it might over- or under-value certain players, and is biased towards players who recieve more playing time. Future versions may explore EPM, RAPTOR, xRAPM, DARKO, BPM, or salary-adjusted surplus value.
+* **No player-specific projections.** The current model values picks based on historical performances of players drafted in those slots. It does not account for incoming player projections. For example, 2026 draft picks were valued using model outcomes trained on historical data. Projection models specifically for the incoming 2026 rookies were not built for this project. 
+
 
 <br>
 
-## References
+## 11 - References
 
 This project builds on the draft-value-curve lineage from:
 
