@@ -881,9 +881,9 @@ The Trade Machine can be used to analyze 3 different questions for this transact
 
 ### Trade Analysis
 
-On paper, this good business for Memphis. The expected value lost from moving down only 1 draft slot is more than compensated for by picking up 2 future second round picks, noted by the 100% higher EPV to Memphis. However, Memphis is not guaranteed to get more productivity out of the players selected with these picks, but the model favors them with about a 64% chance. The trade machine also likes Memphis' chances to get the single-most productive player with the picks involved in this deal, at about a 59% rate. 
+On paper, this is good business for Memphis. The expected value lost from moving down only 1 draft slot is more than compensated for by picking up 2 future second round picks, noted by the 100% higher EPV to Memphis. However, Memphis is not guaranteed to get more productivity out of the players selected with these picks, but the model favors them with about a 64% chance. The trade machine also likes Memphis' chances to get the single-most productive player with the picks involved in this deal, at about a 59% rate. 
 
-An important caveat here is that deals like this one that occur live during the draft are almost always done when a team is targeting a specific player. Teams may be more willing to trade back if a player they like is stil expected to be on the board, or may be willing to "overpay" with future draft picks if they really want a specific player and don't want to risk another team drafting him. Additionally, this does not specifically model player projections on the incoming 2026 rookies, so the above player outcome percentages may be impacted by that too. 
+Important caveat - trades like this during the draft are often done when a team is targeting a specific player. Teams may be more willing to trade back if a player they like is still expected to be on the board, or may be willing to "overpay" with future draft picks if they really want a specific player and don't want to risk another team drafting him. Additionally, this does not specifically model player projections on the incoming 2026 rookies, so the above player outcome percentages may be impacted by that too. 
 
 <br>
 
