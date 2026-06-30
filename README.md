@@ -26,13 +26,12 @@ The **[Interactive Dashboard](https://alexsusi2298.shinyapps.io/nbaDraftLottery/
 | Trade Machine  | Evaluate a real or hypothetical transaction          |
 | Methodology    | Model validation, transition matrix, and Pick Value Curve                   |
 
-
-<details>
-<summary><h3>Dashboard Screenshots</h3></summary>
-
 Total EPV Leaderboard
 
 ![Total EPV leaderboard with dumbbell plots](https://github.com/alex-susi/nbaDraftLottery/blob/master/01_data/epv_leaderboard.png)
+
+<details>
+<summary><h3>Additional Dashboard Screenshots</h3></summary>
 
 Pick Landscape
 
@@ -57,18 +56,25 @@ Trade Machine
 
 ## 03 - Key Findings
 
-1. There's a lot of uncertainty in projecting future expected pick value. Between the difficulty of predicting team performances and the increased randomness of the draft lottery, many indiviudal picks and total team portfolios show small changes in expected value.
+1. There's a lot of uncertainty in projecting future expected pick value. Between the difficulty of predicting team performances and the increased randomness of the draft lottery, many individual picks and total team portfolios show small changes in expected value.
 
-2. In the long run (7 years in this case, since that's the furthest out draft picks can be traded), team performance expectations converge towards league-average (15th). As such, there is also a convergence of expected value for distant draft picks. For first-round picks, the EPV converges to around 9.2, and around 2.5 for second-round picks.
+2. In the long run (7 years in this case, since that's the furthest out draft picks can be traded), team-strength projections converge toward league-average . As a result, far-future first-round picks cluster around roughly 9.2 EPV and far-future second-round pickss around roughly 2.5 EPV.
 
-3. The largest decreases in single-pick EPV are Memphis' 2027 first round most-favorable selection of Utah, Cleveland, and Minnesota (-1.8 EPV due to Utah's pick being ineligible to land in the top 5) and Washington's own 2027 first round pick (-1.6 EPV as it cannot land #1 overall in consecutive years).
+3. The largest increases and decreases in single-pick EPV are:
 
-4. The largest increases in single-pick EPV are Miami's top-14 protected 2027 first round pick (+1.1 EPV) and Brooklyn's less favorable 2027 first round pick between their own and Houston's (+0.7 EPV). 
+| Pick | EPV impact | Driver |
+|---|---:|---|
+| 2027 MEM most favorable first of UTA/CLE/MIN | -1.8 | UTA top-5 ineligibility |
+| 2027 WAS own first | -1.6 | No consecutive #1 overall picks rule |
+| 2027 MIA top-14 protected first owed to CHA | +1.1 | Conveyance/protection interaction |
+| 2027 BKN less favorable first of BKN and HOU | +0.7 | Swap conveyance probability decreased |
 
 
 <br>
 
 ## 04 - Methodology
+
+### Summary
 
 1. **Draft Pick Value Curves**
 
@@ -91,7 +97,7 @@ Trade Machine
 
 ### Draft Pick Value Curve Outcome Variable
 
-The core player outcome is first-four-year [Win Shares](https://www.basketball-reference.com/about/ws.html), a player statistic which attempts to divvy up credit for team success to the individuals on the team. First four years were chosen to cover the length of the cost-controlled rookie-scale contracts. Win Share data scraped from Basketball-Reference draft classes from 1985–2021.
+The core player outcome is first-four-year [Win Shares](https://www.basketball-reference.com/about/ws.html), a player statistic which attempts to divvy up credit for team success to the individuals on the team. First four years were chosen to cover the length of the cost-controlled rookie-scale contracts. Win Share data were scraped from Basketball-Reference draft classes from 1985–2021.
 
 $$\text{4-YR WS}_n = \text{Win Shares accumulated by player } n \text{ over his first four NBA seasons}$$
 
@@ -104,7 +110,7 @@ While higher draft picks have greater EPV, that does not guarantee that players 
 
 <br>
 
-### First Round Pick Model
+### First-Round Pick Model
 
 A regression of 4-YR WS on draft slot. The mean follows a power-law decay in pick number, and per-slot residual variance is smoothed across adjacent picks by a Gaussian random walk on the log scale. The Student-t likelihood accommodates the heavy tails of draft outcomes (superstars and busts) without the mean curve being distorted by outliers.
 
@@ -223,7 +229,7 @@ model {
   // Priors
   log_alpha ~ normal(log(20), 0.60);    // High expected value for #1 overall pick
   log_beta  ~ normal(log(0.55), 0.50);  // Smooth decline in value from pick 1-30
-  gamma     ~ normal(2, 3);             // Late-first round pick expected value
+  gamma     ~ normal(2, 3);             // Late-first-round pick expected value
 
   log_sigma_1       ~ normal(log(8), 0.50); // #1 pick outcome spread centered around 8 WS
   z_sigma_step      ~ std_normal();         // Pick-by-pick outcome-spread adjustments
@@ -278,7 +284,7 @@ generated quantities {
 
 <br>
 
-### Second Round Pick Model
+### Second-Round Pick Model
 
 Unlike first-round picks, second-round picks frequently sign non-guaranteed contracts, spend significant time in the G League, or return to play overseas before ever appearing in an NBA game.
 
@@ -795,10 +801,10 @@ generated quantities {
 
 To project future pick values, the simulation:
 
-1. Seeds each team in its actual 2025–26 lottery tier.
-2. Evolves team tiers year by year using posterior draws from the Markov transition model.
-3. Orders teams within tiers to construct future lottery seeds.
-4. Runs both the current lottery and the new 3-2-1 lottery.
+1. Seeds each team in its actual 2025–26 league-wide rank state.
+2. Evolves future rank states year by year using posterior draws from the 30-rank Markov transition model.
+3. Resolves simulated desired ranks into a valid one-team-per-rank league ordering.
+4. Maps ranks into 3-2-1 lottery tiers and runs both the current lottery and the new 3-2-1 lottery.
 5. Applies 3-2-1 restrictions:
 
    * Relegation-tier ball counts
@@ -828,17 +834,15 @@ The production models were evaluated with sampler diagnostics, posterior predict
 
 <br>
 
-| Model                | Check                            |                                                                                                                                                                              Metric | Use Case                                                                                                                                        | Status |
-| -------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| Round 1 pick value   | R-hat / ESS                      |                                                                                                                                                 max R-hat 1.002; min bulk-ESS 3,566 | Confirms the posterior draws mixed reliably, so the reported means and intervals are not chain artifacts.                                       | PASS   |
-| Round 1 pick value   | Posterior predictive coverage    |                                                                                                                                                        90% player rows coverage 91% | Compares simulated draft outcomes to historical outcomes; good coverage means the model's uncertainty is realistic, not just the average curve. | PASS   |
-| Round 1 pick value   | PSIS-LOO / Pareto-k              |                                                                                                                                      elpd_loo -3889.5; p_loo 5.0; max Pareto-k 0.25 | Tests out-of-sample reliability and whether a few extreme players dominate the fit; acceptable Pareto-k makes the comparison credible.          | PASS   |
-| Round 2 hurdle       | R-hat / ESS                      |                                                                                                                                                 max R-hat 1.002; min bulk-ESS 2,656 | Confirms the posterior draws mixed reliably, so the reported means and intervals are not chain artifacts.                                       | PASS   |
-| Round 2 hurdle       | Posterior predictive / play rate |                                                                                                        90% PPC 93%; empirical play 73.3%; P(play) #31/#45/#60 91.6% / 74.9% / 45.1% | Compares simulated draft outcomes to historical outcomes; good coverage means the model's uncertainty is realistic, not just the average curve. | PASS   |
-| Round 2 hurdle       | PSIS-LOO / Pareto-k              |                                                                                                                                     elpd_loo -2495.9; p_loo 20.9; max Pareto-k 0.57 | Tests out-of-sample reliability and whether a few extreme players dominate the fit; acceptable Pareto-k makes the comparison credible.          | PASS   |
-| Team-strength Markov | Transition-matrix code check     |                                                                                       630 transitions over 22 seasons; Stan vs closed-form max diff 0.0011; mixing time 1.5 seasons | Verifies the tier-transition engine against the conjugate closed-form check, which supports the future team-path simulations.                   | PASS   |
-| Validation script    | NUTS geometry                    | Displayed from `03_validation/validation_decision_table_latest_models.csv` when `05_model_validation.R` has been run; target is 0 divergences, 0 max-treedepth hits, E-BFMI > 0.30. | Checks whether Stan explored the posterior without pathological geometry; divergences or treedepth hits would undermine trust in the draws.     | INFO   |
-| Validation script    | SBC rank uniformity              |                   Displayed from `03_validation/validation_decision_table_latest_models.csv` when SBC is run; approximately uniform ranks indicate calibrated Bayesian uncertainty. | Uses simulated data where the truth is known to verify that Bayesian credible intervals are calibrated.                                         | INFO   |
+| Model                   | Check                            |                                                                                   Metric | Use Case                                                                                                                                                                                                                                                                      | Status |
+| ----------------------- | -------------------------------- | ---------------------------------------------------------------------------------------: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| `picks_Round1.stan`     | R-hat / ESS                      |                                                      max R-hat 1.002; min bulk-ESS 3,566 | Confirms the posterior draws mixed reliably.                                                                                                                                                                     | PASS   |
+| `picks_Round1.stan`     | Posterior predictive coverage    |                                                             90% player rows coverage 91% | Compares simulated draft outcomes to historical outcomes; good coverage means the model's uncertainty is realistic.                                                                                                                               | PASS   |
+| `picks_Round1.stan`     | PSIS-LOO / Pareto-k              |                                           elpd_loo -3889.5; p_loo 5.0; max Pareto-k 0.25 | Tests out-of-sample reliability and whether a few extreme players dominate the fit; acceptable Pareto-k makes the comparison credible.                                                                                                                                        | PASS   |
+| `picks_Round2.stan`     | R-hat / ESS                      |                                                      max R-hat 1.002; min bulk-ESS 2,656 | Confirms the posterior draws mixed reliably.                                                                                                                                                                     | PASS   |
+| `picks_Round2.stan`     | Posterior predictive / play rate |             90% PPC 93%; empirical play 73.3%; P(play) #31/#45/#60 91.6% / 74.9% / 45.1% | Compares simulated draft outcomes to historical outcomes; good coverage means the model's uncertainty is realistic.                                                                                                                               | PASS   |
+| `picks_Round2.stan`     | PSIS-LOO / Pareto-k              |                                          elpd_loo -2495.9; p_loo 20.9; max Pareto-k 0.57 | Tests out-of-sample reliability and whether a few extreme players dominate the fit; acceptable Pareto-k makes the comparison credible.                                                                                                                                        | PASS   |
+| `team_strength_v3.stan` | Transition-matrix code check     | 630 transitions over 22 seasons; Stan vs closed-form max diff —; mixing time 1.8 seasons | Summarizes the available transition-matrix validation for the 30-rank team-strength model. Mixing time indicates how quickly simulated rank states move toward the league baseline. The closed-form Dirichlet cross-check no longer applies to the v3 smoothed-softmax model. | INFO   |
 
 </details>
 
@@ -849,7 +853,6 @@ Additional validation checks include:
 * **SBC** (simulation-based calibration) for rank uniformity.
 * **PSIS-LOO** with Pareto-k diagnostics, comparing the random-walk variance model against constant- and linear-sigma baselines.
 * **Posterior predictive checks** on both player outcomes and transition-count statistics.
-* **NUTS diagnostics** and a closed-form Dirichlet-Multinomial cross-check.
 * **Lottery simulator validation** against the official published 3-2-1 odds table.
 
 <br>
@@ -881,7 +884,13 @@ The Trade Machine can be used to analyze 3 different questions for this transact
 
 ### Trade Analysis
 
-On paper, this is good business for Memphis. The expected value lost from moving down only 1 draft slot is more than compensated for by picking up 2 future second round picks, noted by the 100% higher EPV to Memphis. However, Memphis is not guaranteed to get more productivity out of the players selected with these picks, but the model favors them with about a 64% chance. The trade machine also likes Memphis' chances to get the single-most productive player with the picks involved in this deal, at about a 59% rate. 
+| Metric | Memphis | OKC |
+|---|---:|---:|
+| Expected Pick Value received | `[12.2]` | `[7.6]` |
+| Probability of more total 4-YR WS | `64%` | `36%` |
+| Probability of best single player | `59%` | `41%` |
+
+On paper, this is good business for Memphis. The expected value lost from moving down only 1 draft slot is more than compensated for by picking up 2 future second-round picks. The trade machine estimates Memphis received `12.2` EPV and sent out `[7.6]` EPV, a net gain of `[4.6]` EPV. However, Memphis is not guaranteed to get more productivity out of the players selected with these picks, but the model favors them with about a 64% chance. The trade machine also likes Memphis' chances to get the single-most productive player with the picks involved in this deal, at about a 59% rate. 
 
 Important caveat - trades like this during the draft are often done when a team is targeting a specific player. Teams may be more willing to trade back if a player they like is still expected to be on the board, or may be willing to "overpay" with future draft picks if they really want a specific player and don't want to risk another team drafting him. Additionally, this does not specifically model player projections on the incoming 2026 rookies, so the above player outcome percentages may be impacted by that too. 
 
@@ -914,7 +923,7 @@ Important caveat - trades like this during the draft are often done when a team 
 | `05_model_validation.R` | SBC / LOO / PPC model validation                                            |
 | `picks_Round1.stan`     | First-round pick model                                 |
 | `picks_Round2.stan`     | Second-round pick model                                                        |
-| `team_strength.stan`    | Markov chain model                                                |
+| `team_strength_v3.stan`    | Markov chain model                                                |
 | `app.R`                 | R Shiny dashboard                                                           |
 
 <br>
@@ -981,7 +990,7 @@ Validation outputs are written to:
 * **Team projections are intentionally simple.** The Markov model does not yet account for age, roster continuity, salary cap space, draft capital, injuries, market size, player development, or front-office strategy. Future versions might explore this, as well as higher-order Markov chain models.
 * **Historical team behavior may not generalize.** Team projections are constructed using historical seasons that operated under the old lottery format and CBA rules. The new 3-2-1 lottery may incentivize team behavior changes in ways that historical data cannot fully identify.
 * **Deeply nested swap chains are approximated.** Publicly reported multi-team pick obligations can be ambiguous or conditional in ways that require close approximations.
-* **Win Shares is imperfect.** Because of how the metric is calculated, it might over- or under-value certain players, and is biased towards players who recieve more playing time. Future versions may explore EPM, RAPTOR, xRAPM, DARKO, BPM, or salary-adjusted surplus value.
+* **Win Shares is imperfect.** Because of how the metric is calculated, it might over- or under-value certain players, and is biased towards players who receive more playing time. Future versions may explore EPM, RAPTOR, xRAPM, DARKO, BPM, or salary-adjusted surplus value.
 * **No player-specific projections.** The current model values picks based on historical performances of players drafted in those slots. It does not account for incoming player projections. For example, 2026 draft picks were valued using model outcomes trained on historical data. Projection models specifically for the incoming 2026 rookies were not built for this project. 
 
 
