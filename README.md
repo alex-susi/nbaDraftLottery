@@ -3,7 +3,6 @@
 [![Dashboard](https://img.shields.io/badge/Interactive%20Dashboard-Shiny-blue)](https://alexsusi2298.shinyapps.io/nbaDraftLottery/)
 [![R](https://img.shields.io/badge/R-Shiny%20%7C%20Stan-276DC3)](https://www.r-project.org/)
 [![Stan](https://img.shields.io/badge/Stan-Bayesian%20Modeling-B2011D)](https://mc-stan.org/)
-[![License](https://img.shields.io/badge/License-ADD%20LICENSE-lightgrey)](LICENSE)
 
 
 ## 01 - Overview
@@ -866,7 +865,7 @@ During the first round of the 2026 NBA Draft, [Memphis traded down twice](https:
 1. **Memphis → Oklahoma City:** Memphis moved from **No. 16** to **No. 17** and received **two future second-round picks** from OKC.
 2. **Memphis → Detroit:** Memphis then moved from **No. 17** to **No. 21** and received **three additional future second-round picks** from Detroit.
 
-For purposes of this case study, we will analyze the initial Memphis/OKC deal.
+For purposes of this case study, we will analyze the initial Memphis/OKC deal. I could not find a source that specified which future second-round picks were traded, so for purposes of this exercise, I assumed OKC traded their own 2030 second-round pick and another 2030 second-round pick via Houston.
 
 The Trade Machine can be used to analyze 3 different questions for this transaction:
 
@@ -886,7 +885,11 @@ The Trade Machine can be used to analyze 3 different questions for this transact
 
 | Metric | Memphis | OKC |
 |---|---:|---:|
-| Expected Pick Value received | `12.2` | `7.6` |
+| 2026 #16 EPV | `--` | `7.6` |
+| 2026 #17 EPV | `7.4` | `--` |
+| 2030 R2 from OKC EPV | `2.3` | `--` |
+| 2030 R2 from OKC via HOU EPV | `2.5` | `--` |
+| Total EPV received | `12.2` | `7.6` |
 | Probability of more total 4-YR WS | `64%` | `36%` |
 | Probability of best single player | `59%` | `41%` |
 
