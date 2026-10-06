@@ -1,16 +1,15 @@
 ################################################################################
 # NBA 3-2-1 Lottery Reform — Shiny Dashboard
-# Reads dashboard_data.rds produced by nba_lottery.R
+# Reads dashboard_data.rds produced by 04_lotterySims.R
 #
 # Tabs:
-#   About           — audience-facing landing page / glossary
-#   Pick Landscape  — pick scatterplot or EPV leaderboard
-#   Team Summaries  — all 30 teams with portfolio details
-#   Methodology     — transition heatmaps, rank trajectory explorer, pick-value curve,
-#                     and model-validation diagnostics
-#   Single Pick     — one-asset value distribution
-#   Pick Movers     — pick-level EPV changes
-#   Trade Machine   — hypothetical pick trade assessment
+#   Summary         — headline answer, KPI tiles, EPV leaderboard, biggest pick
+#                     movers, and the full sortable pick table
+#   Team            — sub-tabs: Team portfolios (all 30 teams + detail), Pick
+#                     landscape (scatter / leaderboard), Single pick (distribution)
+#   Trade Machine   — hypothetical pick trade assessment with a one-line verdict
+#   Methodology     — valuation overview, pick-value curve, team-strength model,
+#                     lottery odds, validation diagnostics, and glossary
 #
 # Prereqs:
 #   install.packages(c("shiny","plotly","DT","bslib","tidyverse","igraph"))
@@ -30,10 +29,25 @@ has_igraph <- requireNamespace("igraph", quietly = TRUE)
 dashboard_path <- c("01_data/dashboard_data.rds", "dashboard_data.rds")
 dashboard_path <- dashboard_path[file.exists(dashboard_path)][1]
 if (is.na(dashboard_path)) {
-  stop("dashboard_data.rds not found. Run nba_lottery.R first.")
+  stop("dashboard_data.rds not found. Run 01_data.R through 04_lotterySims.R first.")
 }
 
 dd <- readRDS(dashboard_path)
+
+# Value metric labels come from the export so the app always describes the data
+# it loaded. Caches built before the xRAPM rebuild carry no value_metric and are
+# labeled as Win Shares.
+value_metric_is_xrapm <- identical(dd$metadata$value_metric, "xrapm_war")
+VALUE_UNIT        <- if (value_metric_is_xrapm) "WAR" else "WS"
+VALUE_UNIT_LONG   <- if (value_metric_is_xrapm) "xRAPM WAR" else "Win Shares"
+VALUE_OUTCOME     <- if (value_metric_is_xrapm) "4-Yr WAR" else "4-Yr WS"
+VALUE_METRIC_DESC <- if (value_metric_is_xrapm) {
+  "xRAPM wins above replacement (-2.0 baseline) over the four rookie-contract seasons after the draft"
+} else {
+  "Basketball-Reference Win Shares over a player's first four NBA seasons"
+}
+FIRST_PROJECTED_YEAR_APP <- suppressWarnings(min(as.integer(dd$proj_years), na.rm = TRUE))
+if (!is.finite(FIRST_PROJECTED_YEAR_APP)) FIRST_PROJECTED_YEAR_APP <- 2027L
 
 summary_outcome_df <- dd$summary
 summary_df         <- summary_outcome_df  # backward-compatible alias for outcome mode
@@ -250,9 +264,9 @@ sim_curve_par_draws     <- dd$sim_curve_par_draws
 proj_years              <- dd$proj_years
 
 # value a draft slot under each kept sim's pick-value mean curve. The
-# player-level Monte Carlo uses Student-t noise in nba_lottery.R; the app uses
+# player-level Monte Carlo draws player outcomes in 04_lotterySims.R; the app uses
 # the deterministic mean here so hypothetical-protection deltas are stable.
-# Prefer the per-slot posterior mean columns written by nba_lottery.R because
+# Prefer the per-slot posterior mean columns written by 04_lotterySims.R because
 # they are robust to Stan-side changes in the mean / variance parameterization.
 slot_value_vec <- function(slot_vec) {
   n_draws <- nrow(sim_curve_par_draws)
@@ -294,7 +308,7 @@ slot_value_vec <- function(slot_vec) {
 
 
 # Smooth one-dimensional density helper for Plotly distribution displays.
-# Keeps negative Win Shares intact and only removes missing / non-finite values.
+# Keeps negative values intact and only removes missing / non-finite values.
 density_curve_df <- function(x, n = 512, adjust = 1.05) {
   x <- as.numeric(x)
   x <- x[is.finite(x)]
@@ -315,7 +329,7 @@ density_curve_df <- function(x, n = 512, adjust = 1.05) {
   tibble(x = d$x, density = d$y)
 }
 
-# Expected-asset-value draw matrices. Outcome draws include player-level Student-t
+# Expected-asset-value draw matrices. Outcome draws include player-level outcome
 # noise; EV draws value the same simulated draft slots under each posterior mean
 # slot curve, matching the left-side Trade Machine logic.
 build_asset_ev_draw_matrix_app <- function(slot_mat, convey_mat) {
@@ -412,7 +426,7 @@ if (!is.null(dd$pick_display_members) && nrow(dd$pick_display_members) > 0) {
   pick_display_members <- dd$pick_display_members
 } else {
   if (!"asset_id" %in% names(pick_assets)) {
-    stop("dashboard_data.rds is missing both pick_display_members and pick_assets$asset_id. Re-run nba_lottery.R with the display-assets export enabled.", call. = FALSE)
+    stop("dashboard_data.rds is missing both pick_display_members and pick_assets$asset_id. Re-run 04_lotterySims.R with the display-assets export enabled.", call. = FALSE)
   }
   pick_display_members <- tibble(
     display_asset_id = paste0("display_", pick_assets$asset_id),
@@ -424,7 +438,7 @@ if (!is.null(dd$pick_display_assets) && nrow(dd$pick_display_assets) > 0) {
   pick_display_assets <- dd$pick_display_assets
 } else {
   if (!"asset_id" %in% names(pick_assets)) {
-    stop("dashboard_data.rds is missing both pick_display_assets and pick_assets$asset_id. Re-run nba_lottery.R with the display-assets export enabled.", call. = FALSE)
+    stop("dashboard_data.rds is missing both pick_display_assets and pick_assets$asset_id. Re-run 04_lotterySims.R with the display-assets export enabled.", call. = FALSE)
   }
   pick_display_assets <- pick_assets %>%
     transmute(
@@ -972,13 +986,11 @@ summary_ev_df <- if (!is.null(dd$summary_ev) && nrow(dd$summary_ev) > 0) {
   )
 }
 
-value_mode_choices <- c(
-  "4-Yr Win Share Outcomes" = "outcome",
-  "Expected Pick Value" = "ev"
-)
+value_mode_choices <- setNames(c("outcome", "ev"),
+                               c(paste(VALUE_OUTCOME, "Outcomes"), "Expected Pick Value"))
 
 value_mode_label <- function(mode) {
-  if (identical(mode, "ev")) "Expected Pick Value" else "4-Yr Win Share Outcomes"
+  if (identical(mode, "ev")) "Expected Pick Value" else paste(VALUE_OUTCOME, "Outcomes")
 }
 
 value_mode_short_label <- function(mode) {
@@ -986,7 +998,7 @@ value_mode_short_label <- function(mode) {
 }
 
 value_mode_unit <- function(mode) {
-  if (identical(mode, "ev")) "EPV" else "4-Yr WS"
+  if (identical(mode, "ev")) "EPV" else VALUE_OUTCOME
 }
 
 summary_for_value_mode <- function(mode) {
@@ -2757,6 +2769,7 @@ rank_horizon_tbl_all <- function(P, max_horizon = 7L, interval_choice = "10_90")
 # ============================================================================
 
 ui <- page_navbar(
+  id     = "main_nav",
   theme  = app_theme,
   title  = "NBA 3-2-1 Lottery Reform",
   tags$head(tags$style(HTML("
@@ -3202,283 +3215,293 @@ ui <- page_navbar(
     })();
   "))),
 
-  # ---- Tab 0: About ----
+  # ---- Summary: the answer first ----
   nav_panel(
-    title = "About",
-    icon  = icon("circle-info"),
-    div(class = "about-page",
+    title = "Summary",
+    value = "summary",
+    icon  = icon("gauge"),
+    div(class = "summary-page",
       tags$style(HTML("
-        .about-page { max-width: 1180px; margin: 0 auto; padding: 10px 6px 24px; }
-        .about-hero {
+        .summary-page { max-width: 1500px; margin: 0 auto; padding: 8px 6px 24px; }
+        .summary-hero {
           border: 1px solid rgba(255,255,255,0.08);
           background: linear-gradient(135deg, rgba(109,40,217,0.18), rgba(15,15,26,0.96));
           border-radius: 16px;
-          padding: 22px 24px;
+          padding: 18px 22px;
           margin-bottom: 14px;
         }
-        .about-hero h2 { margin: 0 0 8px; font-weight: 900; letter-spacing: -0.03em; color: #f4f4f8; }
-        .about-hero p, .about-card p, .about-card li { color:#cfd2dc; line-height:1.65; font-size:14px; }
-        .about-card h4 { color:#f4f4f8; font-weight:850; margin:0 0 8px; }
-        .about-card { height:100%; }
-        .about-glossary { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 18px; margin-top: 6px; }
-        .about-start { display:grid; grid-template-columns: 1fr; gap: 14px; margin-top: 6px; }
-        .about-term { color:#f4f4f8; font-weight:850; }
-        .about-def { color:#b8bcc9; }
-        @media (max-width: 900px) { .about-glossary { grid-template-columns: 1fr; } }
+        .summary-hero h2 { margin: 0 0 10px; font-weight: 900; letter-spacing: -0.03em; color: #f4f4f8; font-size: 1.55rem; }
+        .summary-headline { color: #e6e8ef; font-size: 17px; line-height: 1.6; margin: 0; }
+        .summary-headline b { color: #ffffff; }
+        .summary-note { color: #9ca0b0; font-size: 12.5px; line-height: 1.55; margin: 10px 0 0; }
+        .summary-note a { color: #c4b5fd; }
+        .summary-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+        .summary-kpi {
+          border: 1px solid #262638;
+          border-left: 4px solid var(--kpi-accent, #8b5cf6);
+          border-radius: 10px;
+          background: rgba(15,15,26,0.72);
+          padding: 14px 16px;
+          display: flex;
+          gap: 14px;
+          align-items: center;
+          min-height: 112px;
+        }
+        .summary-kpi-label { font-size: 11.5px; color: #9ca0b0; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 750; }
+        .summary-kpi-value { font-size: 28px; font-weight: 850; line-height: 1.12; color: var(--kpi-accent, #e6e8ef); white-space: nowrap; }
+        .summary-kpi-sub { font-size: 13px; color: #aab0c0; margin-top: 4px; line-height: 1.4; }
+        .summary-movers-table { width: 100%; border-collapse: collapse; font-size: 12.5px; table-layout: fixed; }
+        .summary-movers-table th { color: #aab0c0; text-align: right; padding: 6px; border-bottom: 1px solid #1a1a2a; font-weight: 750; }
+        .summary-movers-table td { padding: 6px; border-bottom: 1px solid rgba(255,255,255,0.045); text-align: right; color: #d7d8e2; }
+        .summary-movers-table th.txt, .summary-movers-table td.txt { text-align: left; }
+        .summary-movers-table td.txt { white-space: normal; overflow-wrap: anywhere; }
+        .summary-pick-link, .summary-pick-link:visited { color: #c4b5fd; text-decoration: none; cursor: pointer; }
+        .summary-pick-link:hover { text-decoration: underline; }
+        .summary-hint { font-size: 12px; color: #8b8fa3; margin: 8px 2px 0; }
+        .summary-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: -14px; }
+        .summary-all-filters { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 4px; }
+        .summary-all-filters .shiny-input-container { width: 190px !important; }
+        @media (max-width: 1100px) { .summary-kpis { grid-template-columns: 1fr; } }
       ")),
-      div(class = "about-hero",
-        tags$h2("NBA Draft Pick Valuations Under the New 3-2-1 Lottery"),
-        tags$p("This dashboard values each team's draft-pick portfolio under the current lottery structure and the approved 3-2-1 format. It is meant to translate a complicated asset-allocation problem into three questions: how valuable are a team's picks, how much does the rule change move that value, and which picks explain the movement?"),
-        tags$p(
-          "Details can be found on the Methodology tab and the ",
-          tags$a(
-            "GitHub repo",
-            href = "https://github.com/alex-susi/nbaDraftLottery",
-            target = "_blank",
-            rel = "noopener noreferrer"
-          ),
-          "."
+      div(class = "summary-hero",
+        tags$h2("What the 3-2-1 lottery does to draft-pick value"),
+        uiOutput("summary_headline"),
+        tags$p(class = "summary-note",
+          sprintf(paste0("Expected pick value (EPV) is the expected %s. ",
+                         "Current = the legacy 14-team lottery; 3-2-1 = the approved format, ",
+                         "compared on the same simulated seasons. 2026 picks are locked to the actual draft order. "),
+                  VALUE_METRIC_DESC),
+          "See ", actionLink("goto_methodology", "Methodology"), " or the ",
+          tags$a("GitHub repo", href = "https://github.com/alex-susi/nbaDraftLottery",
+                 target = "_blank", rel = "noopener noreferrer"),
+          " for details."
         )
       ),
-      layout_columns(
-        col_widths = c(6, 6),
-        card(class = "about-card",
-          card_header("Expected Pick Value"),
-          tags$p("Expected Pick Value (EPV) is the model's posterior mean value of a draft asset before we know the actual player selected. The app values every future pick through simulated team trajectories, lottery outcomes, protections, swaps, and conveyance rules, then maps the resulting draft slot to a Bayesian pick-value curve. EPV is useful for trade analysis because it separates the asset value of a pick from the randomness of a specific player's career outcome.")
-        ),
-        card(class = "about-card",
-          card_header("The 3-2-1 Rule"),
-          tags$p("The 3-2-1 system gives the 16 non-playoff teams lottery balls by competitive tier: three balls for non-play-in teams, two balls for the three relegation teams and the 9/10 play-in seeds, and one ball for the 7v8 play-in losers. The model also applies the associated anti-tank rules and the relegation floor, then compares each team's portfolio against the current lottery system on the same simulated seasons.")
-        )
-      ),
+      uiOutput("summary_kpis"),
       layout_columns(
         col_widths = c(7, 5),
-        card(class = "about-card",
-          card_header("Glossary"),
-          div(class = "about-glossary",
-            div(tags$span(class = "about-term", "EPV"), div(class = "about-def", "Expected Pick Value; posterior mean draft-asset value on the four-year Win Shares scale.")),
-            div(tags$span(class = "about-term", "4-YR WS"), div(class = "about-def", "A player's cumulative Basketball-Reference Win Shares over his first four NBA seasons.")),
-            div(tags$span(class = "about-term", "Conveyance"), div(class = "about-def", "Whether a traded pick actually transfers to the receiving team after protections and conditions are applied.")),
-            div(tags$span(class = "about-term", "Protection"), div(class = "about-def", "A condition that lets the original team keep the pick in certain ranges, such as top-4 or lottery protected.")),
-            div(tags$span(class = "about-term", "Swap right"), div(class = "about-def", "The right to exchange picks with another team when the swap holder's outcome is better.")),
-            div(tags$span(class = "about-term", "Relegation"), div(class = "about-def", "The three worst teams overall; under 3-2-1 they receive two lottery balls and cannot fall past pick 12.")),
-            div(tags$span(class = "about-term", "Non-Play-In"), div(class = "about-def", "Non-relegated teams that miss the play-in; under 3-2-1 they receive three balls.")),
-            div(tags$span(class = "about-term", "9/10 Seeds"), div(class = "about-def", "The four conference 9- and 10-seeds; under 3-2-1 they receive two balls.")),
-            div(tags$span(class = "about-term", "7v8 Losers"), div(class = "about-def", "The two teams that lose the 7-vs-8 play-in games; under 3-2-1 they receive one ball.")),
-            div(tags$span(class = "about-term", "Playoff"), div(class = "about-def", "The 14 playoff teams, ordered after the lottery teams for draft-position purposes."))
-          )
-        ),
-        card(class = "about-card",
-          card_header("Where to Start"),
-          div(class = "about-start",
-            div(tags$span(class = "about-term", "Pick Landscape"), div(class = "about-def", "A high-level view of each team's pick quantity, pick quality, and total portfolio value.")),
-            div(tags$span(class = "about-term", "Team Summaries"), div(class = "about-def", "Impact of the 3-2-1 Lottery on each team's pick portfolio, including a summary of the most affected picks.")),
-            div(tags$span(class = "about-term", "Single Pick"), div(class = "about-def", "A distribution view for an individual asset.")),
-            div(tags$span(class = "about-term", "Pick Movers"), div(class = "about-def", "Impact of the 3-2-1 Lottery on every individual pick.")),
-            div(tags$span(class = "about-term", "Trade Machine"), div(class = "about-def", "Evaluate a real or hypothetical transaction. Select picks from each team, attach protections or swap rights, and compare expected asset value, realized outcome simulations, and best-player probabilities side by side."))
-          )
-        )
-      )
-    )
-  ),
-
-  # ---- Tab 1: Pick Landscape ----
-  nav_panel(
-    title = "Pick Landscape",
-    icon  = icon("chart-area"),
-    layout_sidebar(
-      sidebar = sidebar(
-        width = 285,
-        selectInput("impact_year", "Draft year",
-          choices = c("All", sort(unique(pick_display_assets$year))), selected = "All"),
-        selectInput("impact_round", "Round",
-          choices = c("All" = "All", "Round 1" = "1", "Round 2" = "2"), selected = "All"),
-        selectInput("impact_view", "View",
-          choices = c("Pick Scatterplot" = "scatter", "EPV Leaderboard" = "leaderboard"),
-          selected = "scatter"),
-        conditionalPanel(
-          condition = "input.impact_view == 'leaderboard'",
-          selectInput("impact_sort", "Sort teams by",
-            choices = c("Δ EPV (biggest movers)" = "delta",
-                        "Total 3-2-1 EPV" = "total"),
-            selected = "total")
-        ),
-        actionButton("impact_clear", "Clear filters", class = "btn btn-outline-light btn-sm"),
-        tags$p(class = "mono", style = "font-size:11px; color:#888; line-height:1.6; margin-top:12px;",
-          "Pick Scatterplot shows 3-2-1 average EPV per pick against expected pick count. EPV Leaderboard compares each team's current EPV to new 3-2-1 EPV, with the logo placed at the 3-2-1 midpoint.")
-      ),
-      card(
-        card_header(textOutput("impact_title")),
-        plotlyOutput("impact_chart", height = "820px")
-      )
-    )
-  ),
-
-  # ---- Tab 3 ----
-  nav_panel(
-    title = "Team Summaries",
-    icon  = icon("table"),
-    div(class = "ft-page",
-      tags$style(HTML("
-        .ft-split {
-          display: grid;
-          grid-template-columns: minmax(620px, 1.05fr) minmax(390px, 0.95fr);
-          gap: 12px;
-          height: calc(100vh - 92px);
-          min-height: 620px;
-          overflow: hidden;
-        }
-        .ft-table-card, .ft-detail-pane {
-          min-height: 0;
-          height: 100%;
-          overflow: hidden;
-        }
-        .ft-table-card {
-          display: flex;
-          flex-direction: column;
-        }
-        .ft-table-card .card-header,
-        .ft-table-card > .card-header {
-          flex: 0 0 auto;
-        }
-        .ft-table-card .card-body, .ft-table-card .bslib-card-body,
-        .ft-table-card [data-card-body] {
-          min-height: 0 !important;
-          overflow: hidden !important;
-          padding-bottom: 8px !important;
-        }
-        .ft-scroll-wrap {
-          flex: 1 1 auto;
-          min-height: 0;
-          height: auto !important;
-          max-height: none !important;
-          overflow-y: auto !important;
-          overflow-x: hidden !important;
-          padding-right: 4px;
-        }
-        .ft-scroll-wrap table.dataTable thead,
-        .ft-scroll-wrap table.dataTable thead tr,
-        .ft-scroll-wrap table.dataTable thead th {
-          position: sticky !important;
-          top: 0 !important;
-          z-index: 30 !important;
-          background: #0a0a14 !important;
-        }
-        .ft-detail-pane {
-          height: 100%;
-          overflow-y: auto;
-          overflow-x: hidden;
-        }
-        .ft-detail-pane:empty { display:none; }
-        .ft-detail-pane:empty + * { display:none; }
-        .ft-split:has(.ft-detail-pane:empty) {
-          grid-template-columns: 1fr;
-        }
-        .ft-split:has(.ft-detail-pane:empty) .ft-table-card {
-          grid-column: 1 / -1;
-        }
-        .ft-split:has(.ft-detail-pane:empty) .ft-detail-pane {
-          display: none;
-        }
-        .team-detail-card table {
-          table-layout: fixed;
-          width: 100%;
-        }
-        .team-detail-card td, .team-detail-card th {
-          white-space: normal;
-          overflow-wrap: anywhere;
-        }
-        .team-detail-card th {
-          font-weight: 800 !important;
-          color: #cfd2dc !important;
-        }
-      ")),
-      div(class = "ft-split",
-        card(class = "ft-table-card",
-          card_header(textOutput("full_table_title")),
-          div(id = "ft-scroll-wrap", class = "ft-scroll-wrap",
-            DTOutput("full_table")
-          )
-        ),
-        div(class = "ft-detail-pane", uiOutput("team_detail"))
-      )
-    )
-  ),
-
-  # ---- Tab 5: Single Pick Valuation ----
-  nav_panel(
-    title = "Single Pick",
-    icon  = icon("basketball"),
-    layout_sidebar(
-      sidebar = sidebar(
-        width = 500,
-        selectInput("sp_year", "Draft year",
-          choices  = sort(unique(pick_display_assets$year)),
-          selected = 2026),
-        selectizeInput("sp_team", "Team", choices = team_select_choices_app(all_team_abbr),
-          options = selectize_logo_options_app),
-        selectInput("sp_asset", "Pick", choices = NULL),
-        hr(class = "sp-details-separator"),
-        uiOutput("sp_obligation")
-      ),
-      layout_columns(
-        col_widths = c(12),
         card(
-          card_header("Expected Pick Value Impact"),
-          uiOutput("sp_headline")
+          card_header(
+            div(
+              style = "display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; flex-wrap:wrap;",
+              span("Who wins and loses: total EPV by team"),
+              div(class = "summary-controls",
+                div(style = "width:135px;",
+                  selectInput("summary_year", NULL,
+                              choices = c("All years" = "All", sort(unique(pick_display_assets$year))),
+                              selected = "All", width = "100%")),
+                div(style = "width:135px;",
+                  selectInput("summary_round", NULL,
+                              choices = c("Both rounds" = "All", "Round 1" = "1", "Round 2" = "2"),
+                              selected = "All", width = "100%")),
+                div(style = "width:185px;",
+                  selectInput("summary_sort", NULL,
+                              choices = c("Sort by change" = "delta", "Sort by 3-2-1 total" = "total"),
+                              selected = "delta", width = "100%"))
+              )
+            )
+          ),
+          plotlyOutput("summary_leaderboard", height = "820px"),
+          tags$p(class = "summary-hint",
+            "Line = change from the current lottery (grey tick) to 3-2-1 (logo). Shaded bar = 80% interval of the change.")
+        ),
+        card(
+          card_header("Biggest pick movers"),
+          uiOutput("summary_movers"),
+          tags$p(class = "summary-hint", "Click a pick to open its full distribution.")
         )
       ),
-      layout_columns(
-        col_widths = c(12),
-        card(
-          card_header("Expected Pick Value"),
-          plotlyOutput("sp_dist_ev", height = "380px")
+      accordion(
+        id = "summary_more",
+        open = FALSE,
+        accordion_panel(
+          title = "All picks, sorted by change in EPV",
+          value = "all_picks",
+          icon  = icon("list"),
+          div(class = "summary-all-filters",
+            selectInput("pm_year", "Draft year",
+              choices = c("All", sort(unique(pick_display_assets$year))), selected = "All"),
+            selectInput("pm_round", "Round",
+              choices = c("All" = "All", "Round 1" = "1", "Round 2" = "2"), selected = "All"),
+            selectizeInput("pm_team", "Team",
+              choices = c("All teams" = "All", team_select_choices_app(sort(unique(pick_display_assets$owner)))),
+              selected = "All", options = selectize_logo_options_app),
+            actionButton("pm_clear", "Clear filters", class = "btn btn-outline-light btn-sm",
+                         style = "margin-bottom:16px;")
+          ),
+          DTOutput("pm_ev_table")
         )
       )
     )
   ),
 
-
-  # ---- Tab 6: Pick Movers ----
+  # ---- Team: portfolios, pick landscape, single pick ----
   nav_panel(
-    title = "Pick Movers",
-    icon  = icon("chart-line"),
-    div(class = "pm-page",
-      tags$style(HTML("
-        .pm-page { height: calc(100vh - 92px); min-height: 0; overflow: hidden; }
-        .pm-page table.dataTable { font-size: 12px; color:#e6e8ef; table-layout: fixed !important; width: 100% !important; }
-        .pm-page table.dataTable th, .pm-page table.dataTable td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .pm-page table.dataTable td:nth-child(4), .pm-page table.dataTable th:nth-child(4) { white-space: normal; overflow-wrap: anywhere; }
-        .pm-page .card,
-        .pm-page .bslib-card,
-        .pm-page .card-body,
-        .pm-page .bslib-card-body,
-        .pm-page [data-card-body] {
-          min-height: 0 !important;
-        }
-        .pm-page .dataTables_scrollBody {
-          height: calc(100vh - 260px) !important;
-          max-height: calc(100vh - 260px) !important;
-        }
-        .pm-page .card, .pm-page .bslib-card { height: calc(100vh - 138px); overflow:hidden; }
-      ")),
-      layout_sidebar(
-        sidebar = sidebar(
-          width = 235,
-          selectInput("pm_year", "Draft year",
-            choices = c("All", sort(unique(pick_display_assets$year))), selected = "All"),
-          selectInput("pm_round", "Round",
-            choices = c("All" = "All", "Round 1" = "1", "Round 2" = "2"), selected = "All"),
-          selectizeInput("pm_team", "Team",
-            choices = c("All teams" = "All", team_select_choices_app(sort(unique(pick_display_assets$owner)))),
-            selected = "All", options = selectize_logo_options_app),
-          actionButton("pm_clear", "Clear filters", class = "btn btn-outline-light btn-sm")
-        ),
-        layout_columns(
-          col_widths = c(12),
+    title = "Team",
+    value = "team",
+    icon  = icon("users"),
+    navset_underline(
+      id = "team_view",
+      nav_panel(
+        title = "Team portfolios",
+        value = "portfolios",
+        div(class = "ft-page",
+          tags$style(HTML("
+            .ft-split {
+              display: grid;
+              grid-template-columns: minmax(620px, 1.05fr) minmax(390px, 0.95fr);
+              gap: 12px;
+              height: calc(100vh - 150px);
+              min-height: 620px;
+              overflow: hidden;
+            }
+            .ft-table-card, .ft-detail-pane {
+              min-height: 0;
+              height: 100%;
+              overflow: hidden;
+            }
+            .ft-table-card {
+              display: flex;
+              flex-direction: column;
+            }
+            .ft-table-card .card-header,
+            .ft-table-card > .card-header {
+              flex: 0 0 auto;
+            }
+            .ft-table-card .card-body, .ft-table-card .bslib-card-body,
+            .ft-table-card [data-card-body] {
+              min-height: 0 !important;
+              overflow: hidden !important;
+              padding-bottom: 8px !important;
+            }
+            .ft-scroll-wrap {
+              flex: 1 1 auto;
+              min-height: 0;
+              height: auto !important;
+              max-height: none !important;
+              overflow-y: auto !important;
+              overflow-x: hidden !important;
+              padding-right: 4px;
+            }
+            .ft-scroll-wrap table.dataTable thead,
+            .ft-scroll-wrap table.dataTable thead tr,
+            .ft-scroll-wrap table.dataTable thead th {
+              position: sticky !important;
+              top: 0 !important;
+              z-index: 30 !important;
+              background: #0a0a14 !important;
+            }
+            .ft-detail-pane {
+              height: 100%;
+              overflow-y: auto;
+              overflow-x: hidden;
+            }
+            .ft-detail-pane:empty { display:none; }
+            .ft-detail-pane:empty + * { display:none; }
+            .ft-split:has(.ft-detail-pane:empty) {
+              grid-template-columns: 1fr;
+            }
+            .ft-split:has(.ft-detail-pane:empty) .ft-table-card {
+              grid-column: 1 / -1;
+            }
+            .ft-split:has(.ft-detail-pane:empty) .ft-detail-pane {
+              display: none;
+            }
+            .team-detail-card table {
+              table-layout: fixed;
+              width: 100%;
+            }
+            .team-detail-card td, .team-detail-card th {
+              white-space: normal;
+              overflow-wrap: anywhere;
+            }
+            .team-detail-card th {
+              font-weight: 800 !important;
+              color: #cfd2dc !important;
+            }
+          ")),
+          div(class = "ft-split",
+            card(class = "ft-table-card",
+              card_header(textOutput("full_table_title")),
+              div(id = "ft-scroll-wrap", class = "ft-scroll-wrap",
+                DTOutput("full_table")
+              )
+            ),
+            div(class = "ft-detail-pane", uiOutput("team_detail"))
+          )
+        )
+      ),
+      nav_panel(
+        title = "Pick landscape",
+        value = "landscape",
+        layout_sidebar(
+          sidebar = sidebar(
+            width = 285,
+            selectInput("impact_year", "Draft year",
+              choices = c("All", sort(unique(pick_display_assets$year))), selected = "All"),
+            selectInput("impact_round", "Round",
+              choices = c("All" = "All", "Round 1" = "1", "Round 2" = "2"), selected = "All"),
+            selectInput("impact_view", "View",
+              choices = c("Pick Scatterplot" = "scatter", "EPV Leaderboard" = "leaderboard"),
+              selected = "scatter"),
+            conditionalPanel(
+              condition = "input.impact_view == 'leaderboard'",
+              selectInput("impact_sort", "Sort teams by",
+                choices = c("Δ EPV (biggest movers)" = "delta",
+                            "Total 3-2-1 EPV" = "total"),
+                selected = "total")
+            ),
+            actionButton("impact_clear", "Clear filters", class = "btn btn-outline-light btn-sm"),
+            tags$p(class = "mono", style = "font-size:11px; color:#888; line-height:1.6; margin-top:12px;",
+              "Pick Scatterplot shows 3-2-1 average EPV per pick against expected pick count. EPV Leaderboard compares each team's current EPV to new 3-2-1 EPV, with the logo placed at the 3-2-1 midpoint.")
+          ),
           card(
-            card_header("All Picks by Expected Pick Value"),
-            DTOutput("pm_ev_table", height = "calc(100vh - 210px)")
+            card_header(textOutput("impact_title")),
+            plotlyOutput("impact_chart", height = "820px")
+          )
+        )
+      ),
+      nav_panel(
+        title = "Single pick",
+        value = "single",
+        layout_sidebar(
+          sidebar = sidebar(
+            width = 500,
+            selectInput("sp_year", "Draft year",
+              choices  = sort(unique(pick_display_assets$year)),
+              selected = 2026),
+            selectizeInput("sp_team", "Team", choices = team_select_choices_app(all_team_abbr),
+              options = selectize_logo_options_app),
+            selectInput("sp_asset", "Pick", choices = NULL),
+            hr(class = "sp-details-separator"),
+            uiOutput("sp_obligation")
+          ),
+          layout_columns(
+            col_widths = c(12),
+            card(
+              card_header("Expected Pick Value Impact"),
+              uiOutput("sp_headline")
+            )
+          ),
+          layout_columns(
+            col_widths = c(12),
+            card(
+              card_header(
+                div(
+                  style = "display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; flex-wrap:wrap;",
+                  uiOutput("sp_dist_title", inline = TRUE),
+                  div(style = "margin-bottom:-14px;",
+                    radioButtons("sp_value_mode", NULL,
+                                 choices = c("Expected pick value" = "ev",
+                                             setNames("outcome", paste(VALUE_OUTCOME, "outcomes"))),
+                                 selected = "ev", inline = TRUE))
+                )
+              ),
+              conditionalPanel("input.sp_value_mode != 'outcome'",
+                plotlyOutput("sp_dist_ev", height = "380px")),
+              conditionalPanel("input.sp_value_mode == 'outcome'",
+                plotlyOutput("sp_dist_outcome", height = "380px"))
+            )
           )
         )
       )
@@ -3488,6 +3511,7 @@ ui <- page_navbar(
   # ---- Tab 7: Trade Machine ----
   nav_panel(
     title = "Trade Machine",
+    value = "trade",
     icon  = icon("right-left"),
     div(class = "tm-page",
       tags$style(HTML("
@@ -3575,6 +3599,7 @@ ui <- page_navbar(
         }
       ")),
       uiOutput("tm_dynamic_css"),
+      uiOutput("tm_verdict_line"),
       div(class = "tm-top-reset",
         actionButton("tm_reset", "Clear Trade Inputs", class = "btn btn-outline-light tm-clear-btn")
       ),
@@ -3617,7 +3642,14 @@ ui <- page_navbar(
         )
       ),
       card(
-        card_header(tags$div(class = "tm-trade-assessment-title", "Trade Assessment")),
+        card_header(
+          div(
+            style = "display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; flex-wrap:wrap;",
+            tags$div(class = "tm-trade-assessment-title", "Trade Assessment"),
+            div(style = "margin-bottom:-14px;",
+              input_switch("tm_show_outcomes", paste("Show", VALUE_OUTCOME, "outcome views"), value = FALSE))
+          )
+        ),
         uiOutput("tm_verdict")
       ),
       layout_columns(
@@ -3626,21 +3658,26 @@ ui <- page_navbar(
           card_header("Expected Pick Value"),
           plotlyOutput("tm_dist_ev", height = "300px")
         ),
-        card(class = "tm-graph-card",
-          card_header("4-Yr WS Outcome Simulation"),
-          plotlyOutput("tm_dist_outcome", height = "300px")
+        conditionalPanel("input.tm_show_outcomes",
+          card(class = "tm-graph-card",
+            card_header(paste(VALUE_OUTCOME, "Outcome Simulation")),
+            plotlyOutput("tm_dist_outcome", height = "300px")
+          )
         ),
-        card(class = "tm-graph-card",
-          card_header("Best Player Outcome"),
-          plotlyOutput("tm_dist_best", height = "300px")
+        conditionalPanel("input.tm_show_outcomes",
+          card(class = "tm-graph-card",
+            card_header("Best Player Outcome"),
+            plotlyOutput("tm_dist_best", height = "300px")
+          )
         )
       )
     )
   ),
 
-  # ---- Tab 7b: Methodology ----
+  # ---- Methodology: model, lottery odds, validation, glossary ----
   nav_panel(
     title = "Methodology",
+    value = "methodology",
     icon  = icon("project-diagram"),
     div(class = "markov-curve-page",
       tags$style(HTML("
@@ -3660,96 +3697,143 @@ ui <- page_navbar(
           max-height: none !important;
           overflow: visible !important;
         }
-        .markov-curve-page .curve-stack {
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-        }
+        .markov-curve-page .accordion-button { font-weight: 800; font-size: 1.05rem; }
+        .method-card p, .method-card li { color:#cfd2dc; line-height:1.65; font-size:14px; }
+        .method-card code { color:#e6e8ef; }
+        .about-glossary { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 18px; margin-top: 6px; }
+        .about-term { color:#f4f4f8; font-weight:850; }
+        .about-def { color:#b8bcc9; }
+        @media (max-width: 900px) { .about-glossary { grid-template-columns: 1fr; } }
       ")),
-      layout_columns(
-        col_widths = c(6, 6),
-        card(
-          card_header(
-            div(
-              style = "display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%;",
-              span("Team-Strength Transition Matrix"),
-              div(
-                style = "width:170px; margin-bottom:-14px;",
-                selectInput(
-                  "methodology_matrix_type",
-                  NULL,
-                  choices = c("Tier Matrix" = "tier", "30 Rank" = "rank"),
-                  selected = "tier",
-                  width = "100%"
-                )
-              )
+      accordion(
+        id = "methodology_sections",
+        multiple = TRUE,
+        open = c("method_overview", "method_curve"),
+        accordion_panel(
+          title = "How the valuation works",
+          value = "method_overview",
+          icon  = icon("circle-info"),
+          layout_columns(
+            col_widths = c(4, 4, 4),
+            card(class = "method-card",
+              card_header("Expected Pick Value"),
+              tags$p("Expected Pick Value (EPV) is the expected value of a draft asset before the player is known. Every future pick is run through simulated team trajectories, lottery draws, protections, swaps and conveyance rules, and the resulting draft slot is valued with a Bayesian pick-value curve. EPV separates the value of the asset from the luck of any one player's career.")
+            ),
+            card(class = "method-card",
+              card_header("Value Metric"),
+              uiOutput("method_value_metric")
+            ),
+            card(class = "method-card",
+              card_header("The 3-2-1 Rule"),
+              tags$p("The 3-2-1 system gives 16 teams lottery balls by competitive tier: three balls for non-play-in teams, two for the three relegation teams and the 9/10 play-in seeds, and one for the 7v8 play-in losers. The model also applies the anti-tank rules and the relegation floor, then compares each team's portfolio against the current lottery on the same simulated seasons.")
             )
-          ),
-          plotlyOutput("methodology_transition_heatmap", height = "390px")
+          )
         ),
-        card(
-          card_header(
-            div(
-              style = "display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; flex-wrap:wrap;",
-              span("Seven-Year Rank Trajectory"),
-              div(
-                style = "display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:-14px;",
+        accordion_panel(
+          title = "Draft pick value curve",
+          value = "method_curve",
+          icon  = icon("chart-line"),
+          plotlyOutput("pick_curve_plot_combined", height = "440px")
+        ),
+        accordion_panel(
+          title = "Team-strength model",
+          value = "method_markov",
+          icon  = icon("project-diagram"),
+          layout_columns(
+            col_widths = c(6, 6),
+            card(
+              card_header(
                 div(
-                  style = "width:175px;",
-                  selectInput(
-                    "rank_horizon_start_rank",
-                    NULL,
-                    choices = c("All ranks" = "all", setNames(as.character(1:30), sprintf("Rank %02d", 1:30))),
-                    selected = "15",
-                    width = "100%"
-                  )
-                ),
-                div(
-                  style = "width:155px;",
-                  selectInput(
-                    "rank_horizon_interval",
-                    NULL,
-                    choices = c("[40%, 60%]" = "40_60", "[25%, 75%]" = "25_75", "[10%, 90%]" = "10_90"),
-                    selected = "10_90",
-                    width = "100%"
+                  style = "display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%;",
+                  span("Team-Strength Transition Matrix"),
+                  div(
+                    style = "width:170px; margin-bottom:-14px;",
+                    selectInput(
+                      "methodology_matrix_type",
+                      NULL,
+                      choices = c("Tier Matrix" = "tier", "30 Rank" = "rank"),
+                      selected = "tier",
+                      width = "100%"
+                    )
                   )
                 )
-              )
+              ),
+              plotlyOutput("methodology_transition_heatmap", height = "390px")
+            ),
+            card(
+              card_header(
+                div(
+                  style = "display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; flex-wrap:wrap;",
+                  span("Seven-Year Rank Trajectory"),
+                  div(
+                    style = "display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:-14px;",
+                    div(
+                      style = "width:175px;",
+                      selectInput(
+                        "rank_horizon_start_rank",
+                        NULL,
+                        choices = c("All ranks" = "all", setNames(as.character(1:30), sprintf("Rank %02d", 1:30))),
+                        selected = "all",
+                        width = "100%"
+                      )
+                    ),
+                    div(
+                      style = "width:155px;",
+                      selectInput(
+                        "rank_horizon_interval",
+                        NULL,
+                        choices = c("[40%, 60%]" = "40_60", "[25%, 75%]" = "25_75", "[10%, 90%]" = "10_90"),
+                        selected = "10_90",
+                        width = "100%"
+                      )
+                    )
+                  )
+                )
+              ),
+              plotlyOutput("rank_horizon_plot", height = "390px")
             )
+          )
+        ),
+        accordion_panel(
+          title = "Lottery odds",
+          value = "method_lottery",
+          icon  = icon("dice"),
+        layout_columns(
+          col_widths = c(6, 6),
+          card(
+            card_header("Expected Pick Position by Lottery Seed"),
+            plotlyOutput("lottery_line", height = "640px")
           ),
-          plotlyOutput("rank_horizon_plot", height = "390px")
+          card(
+            card_header("Probability of #1 Pick by Seed (%)"),
+            plotlyOutput("lottery_bar", height = "640px")
+          )
         )
-      ),
-      layout_columns(
-        col_widths = c(12),
-        card(
-          card_header("Draft Pick Value Curve"),
-          plotlyOutput("pick_curve_plot_combined", height = "440px")
-        )
-      ),
-      layout_columns(
-        col_widths = c(12),
-        card(
-          card_header("Model Validation & Diagnostics"),
+        ),
+        accordion_panel(
+          title = "Model validation & diagnostics",
+          value = "method_validation",
+          icon  = icon("clipboard-check"),
           uiOutput("validation_panel")
+        ),
+        accordion_panel(
+          title = "Glossary",
+          value = "method_glossary",
+          icon  = icon("book"),
+          div(class = "about-glossary",
+            div(tags$span(class = "about-term", "EPV"), div(class = "about-def", sprintf("Expected Pick Value; the expected %s for a draft asset.", VALUE_OUTCOME))),
+            div(tags$span(class = "about-term", VALUE_OUTCOME), div(class = "about-def", paste0(VALUE_METRIC_DESC, "."))),
+            div(tags$span(class = "about-term", "Replacement level"), div(class = "about-def", "The level of a freely available player (minimum salary or outside a normal rotation): -2.0 points per 100 possessions relative to league average. Playing time below it subtracts value.")),
+            div(tags$span(class = "about-term", "Conveyance"), div(class = "about-def", "Whether a traded pick actually transfers to the receiving team after protections and conditions are applied.")),
+            div(tags$span(class = "about-term", "Protection"), div(class = "about-def", "A condition that lets the original team keep the pick in certain ranges, such as top-4 or lottery protected.")),
+            div(tags$span(class = "about-term", "Swap right"), div(class = "about-def", "The right to exchange picks with another team when the swap holder's outcome is better.")),
+            div(tags$span(class = "about-term", "Relegation"), div(class = "about-def", "The three worst teams overall; under 3-2-1 they receive two lottery balls and cannot fall past pick 12.")),
+            div(tags$span(class = "about-term", "Non-Play-In"), div(class = "about-def", "Non-relegated teams that miss the play-in; under 3-2-1 they receive three balls.")),
+            div(tags$span(class = "about-term", "9/10 Seeds"), div(class = "about-def", "The four conference 9- and 10-seeds; under 3-2-1 they receive two balls.")),
+            div(tags$span(class = "about-term", "7v8 Losers"), div(class = "about-def", "The two teams that lose the 7-vs-8 play-in games; under 3-2-1 they receive one ball.")),
+            div(tags$span(class = "about-term", "Playoff"), div(class = "about-def", "The 14 playoff teams, ordered after the lottery teams for draft-position purposes."))
+          )
         )
-      )
-    )
-  ),
-
-  # ---- Tab 2 ----
-  nav_panel(
-    title = "Lottery Odds",
-    icon  = icon("dice"),
-    layout_columns(
-      col_widths = c(6, 6),
-      card(
-        card_header("Expected Pick Position by Lottery Seed"),
-        plotlyOutput("lottery_line", height = "640px")
-      ),
-      card(
-        card_header("Probability of #1 Pick by Seed (%)"),
-        plotlyOutput("lottery_bar", height = "640px")
       )
     )
   )
@@ -3781,6 +3865,202 @@ rescale_numeric_app <- function(x, to = c(0.75, 1.55)) {
 # ============================================================================
 
 server <- function(input, output, session) {
+
+  # ===========================================================================
+  # SUMMARY: the answer first
+  # ===========================================================================
+
+  observeEvent(input$goto_methodology, {
+    nav_select("main_nav", "methodology", session = session)
+  })
+
+  # Static inputs to the Summary tab (the cached export does not change in-session)
+  summary_team_tbl <- portfolio_quality_quantity_summary_app("ev")
+
+  # Future picks only: 2026 slots are locked and identical under both systems.
+  # A pick "moves" when its EPV changes by at least 5% and at least 0.1 EPV.
+  summary_future_picks <- pick_impact_rows_app("ev") %>%
+    filter(.data$year >= FIRST_PROJECTED_YEAR_APP) %>%
+    mutate(delta     = coalesce(.data$delta, .data$new_mean - .data$cur_mean),
+           delta_pct = ifelse(abs(.data$cur_mean) > 1e-9, .data$delta / .data$cur_mean * 100, NA_real_),
+           moved     = is.finite(.data$delta_pct) & abs(.data$delta_pct) >= 5 & abs(.data$delta) >= 0.1)
+
+  summary_extremes <- function() {
+    tt <- summary_team_tbl
+    list(gain    = tt %>% slice_max(.data$delta_total_value, n = 1, with_ties = FALSE),
+         loss    = tt %>% slice_min(.data$delta_total_value, n = 1, with_ties = FALSE),
+         shifted = sum(pmax(tt$delta_total_value, 0), na.rm = TRUE))
+  }
+
+  pick_link_app <- function(id, label) {
+    id_js <- gsub("'", "\\\\'", as.character(id))
+    tags$a(class = "summary-pick-link", href = "#",
+           onclick = sprintf("Shiny.setInputValue('goto_single_pick', '%s', {priority: 'event'}); return false;", id_js),
+           label)
+  }
+
+  output$summary_headline <- renderUI({
+    ex <- summary_extremes()
+    n_moved <- sum(summary_future_picks$moved)
+    n_fut <- nrow(summary_future_picks)
+    tags$p(class = "summary-headline", HTML(sprintf(paste0(
+      "Under the 3-2-1 lottery, the <b>%s</b> gain the most pick value (<b>%+.1f EPV</b>, ahead in %.0f%% of simulations) ",
+      "and the <b>%s</b> lose the most (<b>%+.1f EPV</b>, behind in %.0f%% of simulations). ",
+      "About <b>%.1f EPV</b> moves between teams in total, and <b>%d of %d</b> future picks change in value by 5%% or more."),
+      htmltools::htmlEscape(team_full_name_app(ex$gain$team)), ex$gain$delta_total_value, 100 * ex$gain$p_positive,
+      htmltools::htmlEscape(team_full_name_app(ex$loss$team)), ex$loss$delta_total_value, 100 * (1 - ex$loss$p_positive),
+      ex$shifted, n_moved, n_fut)))
+  })
+
+  output$summary_kpis <- renderUI({
+    ex <- summary_extremes()
+    n_moved <- sum(summary_future_picks$moved)
+    n_fut <- nrow(summary_future_picks)
+    top <- summary_future_picks %>% slice_max(abs(.data$delta), n = 1, with_ties = FALSE)
+
+    kpi_tile <- function(label, value, sub, accent, team = NULL) {
+      div(class = "summary-kpi", style = sprintf("--kpi-accent:%s;", accent),
+        if (!is.null(team)) team_logo_img_app(team, size = 64),
+        div(
+          div(class = "summary-kpi-label", label),
+          div(class = "summary-kpi-value", value),
+          div(class = "summary-kpi-sub", sub)
+        )
+      )
+    }
+
+    div(class = "summary-kpis",
+      kpi_tile("Biggest gain", sprintf("%+.1f EPV", ex$gain$delta_total_value),
+               sprintf("%s · ahead in %.0f%% of simulations", team_full_name_app(ex$gain$team), 100 * ex$gain$p_positive),
+               "#10b981", ex$gain$team),
+      kpi_tile("Biggest loss", sprintf("%+.1f EPV", ex$loss$delta_total_value),
+               sprintf("%s · behind in %.0f%% of simulations", team_full_name_app(ex$loss$team), 100 * (1 - ex$loss$p_positive)),
+               "#ef4444", ex$loss$team),
+      kpi_tile("Picks that move", sprintf("%d of %d", n_moved, n_fut),
+               if (nrow(top) == 1L) {
+                 sprintf("future picks change by 5%%+ and 0.1+ EPV. Largest: %s %d %s (%+.1f EPV)",
+                         top$owner, as.integer(top$year), top$short_label, top$delta)
+               } else {
+                 "future picks change by 5%+ and 0.1+ EPV"
+               },
+               "#8b5cf6")
+    )
+  })
+
+  output$summary_leaderboard <- renderPlotly({
+    epv_leaderboard_plot(input$summary_year %||% "All",
+                         input$summary_round %||% "All",
+                         input$summary_sort %||% "delta")
+  })
+
+  output$summary_movers <- renderUI({
+    top <- summary_future_picks %>%
+      arrange(desc(abs(.data$delta))) %>%
+      slice_head(n = 10)
+    if (nrow(top) == 0L) return(tags$div(style = "color:#777;", "No future picks in this export."))
+
+    tags$table(class = "summary-movers-table",
+      tags$thead(tags$tr(
+        tags$th(class = "txt", style = "width:19%;", "Owner"),
+        tags$th(class = "txt", style = "width:33%;", "Pick"),
+        tags$th(style = "width:12%;", "Current"),
+        tags$th(style = "width:12%;", "3-2-1"),
+        tags$th(style = "width:12%;", "Δ EPV"),
+        tags$th(style = "width:12%;", "Δ %")
+      )),
+      tags$tbody(lapply(seq_len(nrow(top)), function(i) {
+        r <- top[i, ]
+        tags$tr(
+          tags$td(class = "txt", HTML(team_logo_html_app(r$owner, size = 20, show_abbr = TRUE))),
+          tags$td(class = "txt", pick_link_app(r$display_asset_id, sprintf("%d %s", as.integer(r$year), r$short_label))),
+          tags$td(sprintf("%.1f", r$cur_mean)),
+          tags$td(sprintf("%.1f", r$new_mean)),
+          tags$td(style = sprintf("color:%s;", delta_color_app(r$delta)), sprintf("%+.1f", r$delta)),
+          tags$td(style = sprintf("color:%s;", delta_color_app(r$delta_pct)),
+                  ifelse(is.finite(r$delta_pct), sprintf("%+.1f%%", r$delta_pct), "—"))
+        )
+      }))
+    )
+  })
+
+  # Click-through from any pick link to Team > Single pick
+  pending_sp_asset <- reactiveVal(NULL)
+  pending_sp_team  <- reactiveVal(NULL)
+
+  observeEvent(input$goto_single_pick, {
+    id <- as.character(input$goto_single_pick)
+    row <- pick_display_assets %>% filter(.data$display_asset_id == .env$id)
+    if (nrow(row) == 0L) return()
+
+    year_chr <- as.character(row$year[1])
+    team <- as.character(row$owner[1])
+    same_context <- identical(as.character(input$sp_year), year_chr) && identical(input$sp_team, team)
+
+    pending_sp_asset(id)
+    pending_sp_team(team)
+    if (same_context) {
+      updateSelectInput(session, "sp_asset", selected = id)
+      pending_sp_asset(NULL)
+      pending_sp_team(NULL)
+    } else {
+      updateSelectInput(session, "sp_year", selected = year_chr)
+      updateSelectizeInput(session, "sp_team", choices = team_select_choices_app(all_team_abbr),
+                           selected = team, server = TRUE)
+    }
+    nav_select("main_nav", "team", session = session)
+    nav_select("team_view", "single", session = session)
+  })
+
+  output$sp_dist_title <- renderUI({
+    if (identical(input$sp_value_mode, "outcome")) {
+      span(paste(VALUE_OUTCOME, "Outcome Distribution"))
+    } else {
+      span("Expected Pick Value")
+    }
+  })
+
+  output$method_value_metric <- renderUI({
+    md <- dd$metadata
+    if (value_metric_is_xrapm) {
+      yrs <- md$fit_draft_years %||% c(1996, 2022)
+      tagList(
+        tags$p(sprintf(paste0(
+          "Picks are valued by what players drafted in each slot produced during their rookie contracts: ",
+          "xRAPM wins above replacement over the four seasons after the draft (%d-%d draft classes). ",
+          "Seasons a player misses count as zero."), yrs[1], yrs[2])),
+        tags$p(sprintf(paste0(
+          "xRAPM (xrapm.com) is a plus-minus rating that combines lineup data with a box-score and play-by-play prior. ",
+          "Each season's value is (xRAPM + %.1f) × possessions ÷ 100 ÷ %.1f points per win, so a %.1f player ",
+          "(about the level of a minimum-salary or end-of-rotation player) adds nothing. Lockout and COVID seasons are scaled to 82 games."),
+          -(md$xrapm_replacement %||% -2), md$points_per_win %||% 30.4, md$xrapm_replacement %||% -2))
+      )
+    } else {
+      tags$p("Picks are valued by Basketball-Reference Win Shares over each player's first four NBA seasons.")
+    }
+  })
+
+  # Trade Machine: one-line verdict above the inputs
+  output$tm_verdict_line <- renderUI({
+    d <- trade_draws()
+    base_style <- paste0("margin: 2px 4px 12px; padding: 12px 16px; border-radius: 10px; border: 1px solid #262638; ",
+                         "background: rgba(15,15,26,0.72); font-size: 17px; line-height: 1.5; color: #e6e8ef;")
+    if (is.null(d)) {
+      return(div(style = base_style,
+                 span(style = "color:#8b8fa3;", "Select picks for either team below to see who wins the trade.")))
+    }
+    e <- mean(d$net_to_A_ev)
+    if (abs(e) < 0.05) {
+      return(div(style = base_style, sprintf(
+        "Roughly even: the expected value gap is under 0.05 EPV, and %s come out ahead in %.0f%% of simulations.",
+        team_full_name_app(input$tm_teamA), 100 * mean(d$net_to_A_ev > 0))))
+    }
+    winner <- if (e > 0) input$tm_teamA else input$tm_teamB
+    p_win <- if (e > 0) mean(d$net_to_A_ev > 0) else mean(d$net_to_A_ev < 0)
+    div(style = sprintf("%s border-left: 4px solid %s;", base_style, team_secondary_color_app(winner)),
+      HTML(sprintf("The <b>%s</b> win this trade by <b>%.1f EPV</b> (expected %s) and come out ahead in <b>%.0f%%</b> of simulations.",
+                   htmltools::htmlEscape(team_full_name_app(winner)), abs(e), VALUE_UNIT_LONG, 100 * p_win)))
+  })
+
 
   impact_selected_team <- reactiveVal(NULL)
 
@@ -3840,7 +4120,7 @@ server <- function(input, output, session) {
     impact_selected_team(NULL)
   })
 
-  caterpillar_delta_plot <- function(df, x_title, hover_suffix = "WS") {
+  caterpillar_delta_plot <- function(df, x_title, hover_suffix = VALUE_UNIT) {
     df <- df %>%
       mutate(
         sign_group = if_else(.data$delta_mean >= 0, "Positive", "Negative"),
@@ -3898,111 +4178,118 @@ server <- function(input, output, session) {
     }
   })
 
-  output$impact_chart <- renderPlotly({
-    if (identical(input$impact_view %||% "scatter", "leaderboard")) {
-      sort_by <- input$impact_sort %||% "total"
-      df <- portfolio_quality_quantity_summary_app(
-        "ev",
-        year_filter = input$impact_year %||% "All",
-        round_filter = input$impact_round %||% "All"
+  # EPV leaderboard (dumbbell): current vs 3-2-1 total EPV by team. Shared by the
+  # Summary tab and the Pick landscape view.
+  epv_leaderboard_plot <- function(year_filter = "All", round_filter = "All", sort_by = "total") {
+    df <- portfolio_quality_quantity_summary_app(
+      "ev",
+      year_filter = year_filter,
+      round_filter = round_filter
+    ) %>%
+      transmute(
+        team,
+        current_mean = .data$cur_total_value,
+        new_mean = .data$new_total_value,
+        delta_value = .data$delta_total_value,
+        p_pos = .data$p_positive,
+        n_picks = .data$new_expected_picks,
+        lo = .data$cur_total_value + coalesce(.data$delta_q10, 0),
+        hi = .data$cur_total_value + coalesce(.data$delta_q90, 0)
       ) %>%
-        transmute(
-          team,
-          current_mean = .data$cur_total_value,
-          new_mean = .data$new_total_value,
-          delta_value = .data$delta_total_value,
-          p_pos = .data$p_positive,
-          n_picks = .data$new_expected_picks,
-          lo = .data$cur_total_value + coalesce(.data$delta_q10, 0),
-          hi = .data$cur_total_value + coalesce(.data$delta_q90, 0)
-        ) %>%
-        mutate(
-          dir = if_else(.data$delta_value >= 0, "gain", "loss"),
-          col = if_else(.data$delta_value >= 0, "#10b981", "#ef4444"),
-          primary = team_primary_color_app(.data$team),
-          text_col = vapply(.data$primary, contrast_text_color_app, character(1)),
-          hover_text = sprintf(
-            paste0(
-              "<b>%s</b><br>",
-              "Total Picks: %.1f<br>",
-              "Current: %.1f EPV<br>",
-              "3-2-1: %.1f EPV<br>",
-              "Change: %+.1f EPV<br>",
-              "90%% CI: [%.1f, %.1f]"
-            ),
-            .data$team, .data$n_picks, .data$current_mean, .data$new_mean, .data$delta_value, .data$lo, .data$hi
+      mutate(
+        dir = if_else(.data$delta_value >= 0, "gain", "loss"),
+        col = if_else(.data$delta_value >= 0, "#10b981", "#ef4444"),
+        primary = team_primary_color_app(.data$team),
+        text_col = vapply(.data$primary, contrast_text_color_app, character(1)),
+        hover_text = sprintf(
+          paste0(
+            "<b>%s</b><br>",
+            "Total Picks: %.1f<br>",
+            "Current: %.1f EPV<br>",
+            "3-2-1: %.1f EPV<br>",
+            "Change: %+.1f EPV<br>",
+            "80%% interval: [%.1f, %.1f]"
           ),
-          order_key = if (identical(sort_by, "total")) .data$new_mean else .data$delta_value
-        ) %>%
-        arrange(.data$order_key) %>%
-        mutate(
-          y = seq_len(n()),
-          x_logo = .data$new_mean,
-          y_logo = .data$y
-        )
-
-      if (nrow(df) == 0L) {
-        return(plot_ly() %>% plotly_dark(annotations = list(text = "No picks match the selected filters",
-          x = 0.5, y = 0.5, xref = "paper", yref = "paper", showarrow = FALSE)))
-      }
-
-      p <- plot_ly(source = "impact_leaderboard")
-      for (i in seq_len(nrow(df))) {
-        row_i <- df[i, , drop = FALSE]
-        p <- p %>%
-          add_segments(
-            data = row_i,
-            x = ~lo, xend = ~hi, y = ~y, yend = ~y, customdata = ~team,
-            line = list(color = "rgba(255,255,255,0.16)", width = 6),
-            hovertemplate = paste0(row_i$hover_text[1], "<extra></extra>"),
-            hoverlabel = list(bgcolor = row_i$primary[1], font = list(color = row_i$text_col[1]), align = "right"),
-            showlegend = FALSE
-          ) %>%
-          add_segments(
-            data = row_i,
-            x = ~current_mean, xend = ~new_mean, y = ~y, yend = ~y, customdata = ~team,
-            line = list(color = row_i$col[1], width = 2), opacity = 0.62,
-            hovertemplate = paste0(row_i$hover_text[1], "<extra></extra>"),
-            hoverlabel = list(bgcolor = row_i$primary[1], font = list(color = row_i$text_col[1]), align = "right"),
-            showlegend = FALSE
-          ) %>%
-          add_segments(
-            data = row_i,
-            x = ~current_mean, xend = ~current_mean, y = ~(y - 0.16), yend = ~(y + 0.16), customdata = ~team,
-            line = list(color = "rgba(229,231,235,0.62)", width = 2),
-            hoverinfo = "skip", showlegend = FALSE
-          ) %>%
-          add_markers(
-            data = row_i,
-            x = ~new_mean, y = ~y, customdata = ~team,
-            marker = list(color = "rgba(255,255,255,0.01)", size = 28, line = list(color = "rgba(255,255,255,0)", width = 0)),
-            hovertemplate = paste0(row_i$hover_text[1], "<extra></extra>"),
-            hoverlabel = list(bgcolor = row_i$primary[1], font = list(color = row_i$text_col[1]), align = "right"),
-            showlegend = FALSE, opacity = 0.01
-          )
-      }
-
-      logo_images <- team_logo_layout_images_app(
-        df %>% transmute(team, x = new_mean, y = y),
-        x_col = "x", y_col = "y",
-        sizex = max(3.8, diff(range(c(df$current_mean, df$new_mean), na.rm = TRUE)) * 0.036),
-        sizey = 1.18,
-        opacity = 0.98
+          .data$team, .data$n_picks, .data$current_mean, .data$new_mean, .data$delta_value, .data$lo, .data$hi
+        ),
+        order_key = if (identical(sort_by, "total")) .data$new_mean else .data$delta_value
+      ) %>%
+      arrange(.data$order_key) %>%
+      mutate(
+        y = seq_len(n()),
+        x_logo = .data$new_mean,
+        y_logo = .data$y
       )
 
-      rng <- range(c(df$lo, df$hi, df$current_mean, df$new_mean, df$x_logo), na.rm = TRUE)
-      if (!all(is.finite(rng)) || diff(rng) == 0) rng <- c(0, 1)
-      pad <- max(1, diff(rng) * 0.06)
+    if (nrow(df) == 0L) {
+      return(plot_ly() %>% plotly_dark(annotations = list(text = "No picks match the selected filters",
+        x = 0.5, y = 0.5, xref = "paper", yref = "paper", showarrow = FALSE)))
+    }
 
-      plot_obj <- p %>%
-        plotly_dark(
-          xaxis = list(title = list(text = "Total EPV"), range = c(rng[1] - pad, rng[2] + pad), tickformat = ".1f"),
-          yaxis = list(title = list(text = "Team"), tickmode = "array", tickvals = df$y, ticktext = as.character(df$team), range = c(0.5, nrow(df) + 0.5), autorange = FALSE),
-          margin = list(l = 76, r = 30, t = 12, b = 36),
+    p <- plot_ly(source = "impact_leaderboard")
+    for (i in seq_len(nrow(df))) {
+      row_i <- df[i, , drop = FALSE]
+      p <- p %>%
+        add_segments(
+          data = row_i,
+          x = ~lo, xend = ~hi, y = ~y, yend = ~y, customdata = ~team,
+          line = list(color = "rgba(255,255,255,0.16)", width = 6),
+          hovertemplate = paste0(row_i$hover_text[1], "<extra></extra>"),
+          hoverlabel = list(bgcolor = row_i$primary[1], font = list(color = row_i$text_col[1]), align = "right"),
           showlegend = FALSE
+        ) %>%
+        add_segments(
+          data = row_i,
+          x = ~current_mean, xend = ~new_mean, y = ~y, yend = ~y, customdata = ~team,
+          line = list(color = row_i$col[1], width = 2), opacity = 0.62,
+          hovertemplate = paste0(row_i$hover_text[1], "<extra></extra>"),
+          hoverlabel = list(bgcolor = row_i$primary[1], font = list(color = row_i$text_col[1]), align = "right"),
+          showlegend = FALSE
+        ) %>%
+        add_segments(
+          data = row_i,
+          x = ~current_mean, xend = ~current_mean, y = ~(y - 0.16), yend = ~(y + 0.16), customdata = ~team,
+          line = list(color = "rgba(229,231,235,0.62)", width = 2),
+          hoverinfo = "skip", showlegend = FALSE
+        ) %>%
+        add_markers(
+          data = row_i,
+          x = ~new_mean, y = ~y, customdata = ~team,
+          marker = list(color = "rgba(255,255,255,0.01)", size = 28, line = list(color = "rgba(255,255,255,0)", width = 0)),
+          hovertemplate = paste0(row_i$hover_text[1], "<extra></extra>"),
+          hoverlabel = list(bgcolor = row_i$primary[1], font = list(color = row_i$text_col[1]), align = "right"),
+          showlegend = FALSE, opacity = 0.01
         )
+    }
 
-      return(attach_plot_logo_overlays_app(plot_obj, df %>% transmute(team, x = x_logo, y = y_logo), "x", "y", size = 34))
+    logo_images <- team_logo_layout_images_app(
+      df %>% transmute(team, x = new_mean, y = y),
+      x_col = "x", y_col = "y",
+      sizex = max(3.8, diff(range(c(df$current_mean, df$new_mean), na.rm = TRUE)) * 0.036),
+      sizey = 1.18,
+      opacity = 0.98
+    )
+
+    rng <- range(c(df$lo, df$hi, df$current_mean, df$new_mean, df$x_logo), na.rm = TRUE)
+    if (!all(is.finite(rng)) || diff(rng) == 0) rng <- c(0, 1)
+    pad <- max(1, diff(rng) * 0.06)
+
+    plot_obj <- p %>%
+      plotly_dark(
+        xaxis = list(title = list(text = "Total EPV"), range = c(rng[1] - pad, rng[2] + pad), tickformat = ".1f"),
+        yaxis = list(title = list(text = "Team"), tickmode = "array", tickvals = df$y, ticktext = as.character(df$team), range = c(0.5, nrow(df) + 0.5), autorange = FALSE),
+        margin = list(l = 76, r = 30, t = 12, b = 36),
+        showlegend = FALSE
+      )
+
+    return(attach_plot_logo_overlays_app(plot_obj, df %>% transmute(team, x = x_logo, y = y_logo), "x", "y", size = 34))
+  }
+
+  output$impact_chart <- renderPlotly({
+    if (identical(input$impact_view %||% "scatter", "leaderboard")) {
+      return(epv_leaderboard_plot(input$impact_year %||% "All",
+                                  input$impact_round %||% "All",
+                                  input$impact_sort %||% "total"))
     }
 
     df_all <- portfolio_quality_quantity_summary_app(
@@ -4272,7 +4559,7 @@ server <- function(input, output, session) {
 
   output$lottery_validation_table <- renderDT({
     if (is.null(lottery_tier_validation) || nrow(lottery_tier_validation) == 0) {
-      return(datatable(tibble(Message = "Re-run nba_lottery.R to generate the published-odds validation table."),
+      return(datatable(tibble(Message = "Re-run 04_lotterySims.R to generate the published-odds validation table."),
                        rownames = FALSE, options = list(dom = "t")))
     }
 
@@ -4412,7 +4699,8 @@ server <- function(input, output, session) {
           r <- tbl[i, ]
           pct_txt <- ifelse(is.na(r$delta_pct), "—", sprintf("%+.1f%%", r$delta_pct))
           tags$tr(
-            tags$td(style = "padding:4px; overflow-wrap:anywhere;", sprintf("%s %s", r$year, r$short_label)),
+            tags$td(style = "padding:4px; overflow-wrap:anywhere;",
+                    pick_link_app(r$display_asset_id, sprintf("%s %s", r$year, r$short_label))),
             tags$td(style = "padding:4px; text-align:right;", sprintf("%.1f", r$cur_mean)),
             tags$td(style = "padding:4px; text-align:right;", sprintf("%.1f", r$new_mean)),
             tags$td(style = sprintf("padding:4px; text-align:right; color:%s;", delta_color_app(r$delta)), sprintf("%+.1f", r$delta)),
@@ -4606,7 +4894,7 @@ server <- function(input, output, session) {
   output$rank_horizon_plot <- renderPlotly({
     interval_choice <- input$rank_horizon_interval %||% "10_90"
     interval_label <- rank_horizon_interval_label(interval_choice)
-    selected_rank <- as.character(input$rank_horizon_start_rank %||% "15")
+    selected_rank <- as.character(input$rank_horizon_start_rank %||% "all")
 
     if (identical(selected_rank, "all")) {
       tbl <- rank_horizon_tbl_all(rank_trans_mat, 7L, interval_choice)
@@ -4711,7 +4999,7 @@ server <- function(input, output, session) {
   })
 
   # ---- Pick value curves ----
-  pick_curve_base_plot <- function(pc, x_title, y_title = "4-Yr Win Shares") {
+  pick_curve_base_plot <- function(pc, x_title, y_title = VALUE_OUTCOME) {
     # The curve shows two distinct uncertainty concepts:
     #   1) EV credible interval = uncertainty around the posterior mean pick value.
     #   2) Player outcome interval = asymmetric 10th-90th percentile realized outcomes.
@@ -4808,12 +5096,12 @@ server <- function(input, output, session) {
       return(plot_ly() %>%
                plotly_dark(
                  xaxis = list(title = list(text = "Pick")),
-                 yaxis = list(title = list(text = "4-Yr Win Shares")),
+                 yaxis = list(title = list(text = VALUE_OUTCOME)),
                  annotations = list(text = "Combined pick curve unavailable", x = 0.5, y = 0.5,
                                     xref = "paper", yref = "paper", showarrow = FALSE)))
     }
 
-    p <- pick_curve_base_plot(pc, x_title = "Pick", y_title = "4-Yr Win Shares")
+    p <- pick_curve_base_plot(pc, x_title = "Pick", y_title = VALUE_OUTCOME)
 
     pc2 <- pc %>% filter(.data$pick >= 31, .data$pick <= 60)
     if (nrow(pc2) > 0 && "p_play" %in% names(pc2) && any(is.finite(pc2$p_play))) {
@@ -4865,7 +5153,7 @@ server <- function(input, output, session) {
                font = list(color = "#aaa", size = 11))
         ),
         xaxis = list(title = list(text = "Pick"), dtick = 5, range = c(1, 60)),
-        yaxis = list(title = list(text = "4-Yr Win Shares"), gridcolor = "#1a1a2a", zerolinecolor = "#333"),
+        yaxis = list(title = list(text = VALUE_OUTCOME), gridcolor = "#1a1a2a", zerolinecolor = "#333"),
         yaxis2 = list(
           title = list(text = "P(play) %", standoff = 18),
           overlaying = "y",
@@ -4894,7 +5182,7 @@ server <- function(input, output, session) {
   # curve output name.
   output$pick_curve_plot <- renderPlotly({
     pc <- pick_curve
-    pick_curve_base_plot(pc, x_title = "Pick", y_title = "4-Yr Win Shares")
+    pick_curve_base_plot(pc, x_title = "Pick", y_title = VALUE_OUTCOME)
   })
 
   # ---- Validation panel ----
@@ -5092,7 +5380,9 @@ server <- function(input, output, session) {
 
   # populate team and pick choices for the chosen year / team
   observeEvent(input$sp_year, {
-    cur_team <- input$sp_team %||% all_team_abbr[1]
+    # A pick click-through sets the target team before the year changes
+    pend_team <- isolate(pending_sp_team())
+    cur_team <- if (!is.null(pend_team)) pend_team else (input$sp_team %||% all_team_abbr[1])
     if (!cur_team %in% all_team_abbr) cur_team <- all_team_abbr[1]
     updateSelectizeInput(session, "sp_team", choices = team_select_choices_app(all_team_abbr), selected = cur_team, server = TRUE)
   }, ignoreNULL = FALSE)
@@ -5107,7 +5397,16 @@ server <- function(input, output, session) {
       updateSelectInput(session, "sp_asset", choices = character(0), selected = character(0))
     } else {
       current <- input$sp_asset
-      selected <- if (!is.null(current) && current %in% opts$display_asset_id) current else opts$display_asset_id[1]
+      pending <- isolate(pending_sp_asset())
+      selected <- if (!is.null(pending) && pending %in% opts$display_asset_id) {
+        pending_sp_asset(NULL)
+        pending_sp_team(NULL)
+        pending
+      } else if (!is.null(current) && current %in% opts$display_asset_id) {
+        current
+      } else {
+        opts$display_asset_id[1]
+      }
       choice_vec <- setNames(opts$display_asset_id, opts$short_label)
       updateSelectInput(session, "sp_asset", choices = choice_vec, selected = selected)
     }
@@ -5291,11 +5590,11 @@ server <- function(input, output, session) {
       add_lines(data = cur_density, x = ~x, y = ~density,
                 name = "Current", fill = "tozeroy",
                 line = list(color = "#3b82f6", width = 2.5),
-                hovertemplate = sprintf("Current %s<br>WS: %%{x:.1f}<br>Density: %%{y:.1f}<extra></extra>", hover_label)) %>%
+                hovertemplate = sprintf("Current %s<br>%s: %%{x:.1f}<br>Density: %%{y:.1f}<extra></extra>", hover_label, VALUE_UNIT)) %>%
       add_lines(data = new_density, x = ~x, y = ~density,
                 name = "3-2-1", fill = "tozeroy",
                 line = list(color = "#f59e0b", width = 2.5),
-                hovertemplate = sprintf("3-2-1 %s<br>WS: %%{x:.1f}<br>Density: %%{y:.1f}<extra></extra>", hover_label)) %>%
+                hovertemplate = sprintf("3-2-1 %s<br>%s: %%{x:.1f}<br>Density: %%{y:.1f}<extra></extra>", hover_label, VALUE_UNIT)) %>%
       layout(
         paper_bgcolor = "rgba(0,0,0,0)", plot_bgcolor = "#0f0f1a",
         font = list(family = "IBM Plex Mono", color = "#999"),
@@ -5315,7 +5614,7 @@ server <- function(input, output, session) {
       cur = display_asset_cur_ev_draws[, input$sp_asset],
       new = display_asset_new_ev_draws[, input$sp_asset],
       stats_row = sp_stats_ev(),
-      x_title = "Expected Pick Value (4-Yr WS scale)",
+      x_title = sprintf("Expected Pick Value (%s scale)", VALUE_OUTCOME),
       hover_label = "EV"
     )
   })
@@ -5326,7 +5625,7 @@ server <- function(input, output, session) {
       cur = display_asset_cur_draws[, input$sp_asset],
       new = display_asset_new_draws[, input$sp_asset],
       stats_row = sp_stats_outcome(),
-      x_title = "Realized 4-Yr Win Shares outcome",
+      x_title = sprintf("Realized %s outcome", VALUE_OUTCOME),
       hover_label = "outcome"
     )
   })
@@ -5363,7 +5662,9 @@ server <- function(input, output, session) {
     rows %>%
       mutate(
         Owner = team_logo_html_app(.data$owner, size = 20, show_abbr = TRUE),
-        Pick = .data$short_label,
+        Pick = sprintf("<a class='summary-pick-link' href='#' onclick=\"Shiny.setInputValue('goto_single_pick', '%s', {priority: 'event'}); return false;\">%s</a>",
+                       htmltools::htmlEscape(gsub("'", "\\\\'", as.character(.data$display_asset_id)), attribute = TRUE),
+                       htmltools::htmlEscape(.data$short_label)),
         Current = fmt_num1_app(.data$cur_mean),
         `3-2-1` = fmt_num1_app(.data$new_mean),
         delta_epv_num = round(.data$delta, 1),
@@ -5397,7 +5698,7 @@ server <- function(input, output, session) {
         dom = "t",
         ordering = TRUE,
         scrollX = FALSE,
-        scrollY = "calc(100vh - 260px)",
+        scrollY = "560px",
         scrollCollapse = FALSE,
         autoWidth = FALSE,
         columnDefs = list(
@@ -5410,6 +5711,7 @@ server <- function(input, output, session) {
           list(width = "84px", targets = 6),
           list(width = "92px", targets = 7),
           list(className = "dt-right", targets = c(1, 2, 4, 5, 6, 7)),
+          list(targets = 3, render = JS("function(data,type,row,meta){ if(type === 'sort' || type === 'type' || type === 'filter') return $('<div>').html(data).text(); return data; }")),
           list(targets = 6, render = JS("function(data,type,row,meta){ var txt = $('<div>').html(data).text().replace('%',''); var x = parseFloat(txt); if(type === 'sort' || type === 'type') return isNaN(x) ? 0 : x; return data; }")),
           list(targets = 7, render = JS("function(data,type,row,meta){ var txt = $('<div>').html(data).text().replace('%',''); var x = parseFloat(txt); if(type === 'sort' || type === 'type') return isNaN(x) ? 0 : x; return data; }"))
         )
@@ -5558,7 +5860,7 @@ server <- function(input, output, session) {
   # ---- value (per sim) of a single sent pick TO ITS RECEIVER ----
   # The Trade Machine keeps two concepts separate:
   #   1. Expected pick value: posterior mean slot value, no player-outcome noise.
-  #   2. Realized player outcome: sampled player-level 4-Year WS draws.
+  #   2. Realized player outcome: sampled player-level four-season value draws.
   pick_conveys_app <- function(pos, protection) {
     if (is.null(protection) || length(protection) == 0 || is.na(protection)) {
       return(rep(TRUE, length(pos)))
@@ -6170,6 +6472,19 @@ server <- function(input, output, session) {
       )
     }
 
+    ev_block <- metric_block(
+      signed_metric_card(eA_ev, q05_ev, q95_ev, "EPV"),
+      prob_card(sprintf("%s higher EPV", input$tm_teamA), pA_ev, team_secondary_color_app(input$tm_teamA), team_primary_color_app(input$tm_teamA)),
+      prob_card(sprintf("%s higher EPV", input$tm_teamB), pB_ev, team_secondary_color_app(input$tm_teamB), team_primary_color_app(input$tm_teamB)),
+      "Expected Pick Value compares the typical value of the draft assets each side receives, using the model's pick-value curve."
+    )
+
+    # EPV is the default view; realized-outcome views sit behind the switch
+    if (!isTRUE(input$tm_show_outcomes)) {
+      return(tags$div(style = "font-size:13px; color:#bbb; line-height:1.7;",
+        tags$div(style = "display:grid; grid-template-columns:minmax(0, 620px); gap:12px;", ev_block)))
+    }
+
     tags$div(style = "font-size:13px; color:#bbb; line-height:1.7;",
       tags$div(
         style = "display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:12px; align-items:stretch;",
@@ -6180,23 +6495,26 @@ server <- function(input, output, session) {
           "Expected Pick Value compares the typical value of the draft assets each side receives, using the model's pick-value curve."
         ),
         metric_block(
-          signed_metric_card(eA_outcome, q05_outcome, q95_outcome, "4-Yr WS"),
-          prob_card(sprintf("%s more 4-Yr WS", input$tm_teamA), pA_outcome, team_secondary_color_app(input$tm_teamA), team_primary_color_app(input$tm_teamA)),
-          prob_card(sprintf("%s more 4-Yr WS", input$tm_teamB), pB_outcome, team_secondary_color_app(input$tm_teamB), team_primary_color_app(input$tm_teamB)),
-          "4-Yr WS shows the simulated player outcomes those picks could become over a rookie-scale four-year window."
+          signed_metric_card(eA_outcome, q05_outcome, q95_outcome, VALUE_OUTCOME),
+          prob_card(sprintf("%s more %s", input$tm_teamA, VALUE_OUTCOME), pA_outcome, team_secondary_color_app(input$tm_teamA), team_primary_color_app(input$tm_teamA)),
+          prob_card(sprintf("%s more %s", input$tm_teamB, VALUE_OUTCOME), pB_outcome, team_secondary_color_app(input$tm_teamB), team_primary_color_app(input$tm_teamB)),
+          sprintf("%s shows the simulated player outcomes those picks could become over the four rookie-contract seasons.", VALUE_OUTCOME)
         ),
         tags$div(style = "display:flex; flex-direction:column; gap:8px; min-width:0; height:100%;",
           best_outcome_card(),
-          metric_blurb("Best Player estimates which side is more likely to receive the single best 4-Yr WS player outcome among the picks in the trade.")
+          metric_blurb(sprintf("Best Player estimates which side is more likely to receive the single best %s player outcome among the picks in the trade.", VALUE_OUTCOME))
         )
       )
     )
   })
 
-  trade_density_plot <- function(x, teamA, teamB, x_title, hover_label = "Net") {
+  trade_density_plot <- function(x, teamA, teamB, x_title, hover_label = "Net",
+                                 x_cap = NULL, x_dtick = NULL) {
     # In these distribution plots, the LEFT side (< 0) favors Team 1 and the
     # RIGHT side (> 0) favors Team 2. The trade_draws object stores net values
     # to Team 1, so callers pass the negative of that value.
+    # x_cap limits only the visible axis to [-x_cap, x_cap]; the density and
+    # win shares still use every draw.
     x <- as.numeric(x)
     x[!is.finite(x)] <- 0
     ddf <- density_curve_df(x)
@@ -6232,10 +6550,19 @@ server <- function(input, output, session) {
                            fillcolor = fillB,
                            hovertemplate = hover_txt)
     }
+    xaxis <- list(title = x_title, gridcolor = "#24243a", zerolinecolor = "#6b7280")
+    if (!is.null(x_cap) && nrow(ddf) > 0) {
+      xaxis$range <- c(max(min(ddf$x), -x_cap), min(max(ddf$x), x_cap))
+    }
+    if (!is.null(x_dtick)) {
+      xaxis$tick0 <- 0
+      xaxis$dtick <- x_dtick
+    }
+
     p %>% layout(
       paper_bgcolor = "rgba(0,0,0,0)", plot_bgcolor = "#0f0f1a",
       font = list(family = "IBM Plex Mono", color = "#d9dddc"),
-      xaxis = list(title = x_title, gridcolor = "#24243a", zerolinecolor = "#6b7280"),
+      xaxis = xaxis,
       yaxis = list(title = "Density", gridcolor = "#24243a"),
       showlegend = FALSE,
       shapes = list(list(type = "line", x0 = 0, x1 = 0, y0 = 0, y1 = 1,
@@ -6281,8 +6608,10 @@ server <- function(input, output, session) {
       -d$net_to_A_outcome,
       teamA = input$tm_teamA,
       teamB = input$tm_teamB,
-      x_title = "Net 4-Yr WS Outcome",
-      hover_label = "Net 4-Yr WS"
+      x_title = sprintf("Net %s Outcome", VALUE_OUTCOME),
+      hover_label = sprintf("Net %s", VALUE_OUTCOME),
+      x_cap = 50,
+      x_dtick = 10
     )
   })
 
@@ -6293,8 +6622,10 @@ server <- function(input, output, session) {
       -d$best_outcome_edge_to_A,
       teamA = input$tm_teamA,
       teamB = input$tm_teamB,
-      x_title = "Best Player 4-Yr WS Edge",
-      hover_label = "Best-player edge"
+      x_title = sprintf("Best Player %s Edge", VALUE_OUTCOME),
+      hover_label = "Best-player edge",
+      x_cap = 50,
+      x_dtick = 10
     )
   })
 

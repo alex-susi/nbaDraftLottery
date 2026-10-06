@@ -1,744 +1,23 @@
 # ============================================================================
-# SECTION 10: LOTTERY SIMULATORS
+# 04_lotterySims.R
 # ============================================================================
-# Current (pre-2027) system: 14 teams, weighted combos, top-4 drawn.
-# Approved 3-2-1 system: 16 teams, 2/3/2/1 balls by tier, ALL 16 drawn, bottom
-# three "relegated" cannot land worse than #12.
-
-sim_current_lottery <- function() {
-  combos <- c(140,140,140,125,105,90,75,60,45,30,20,15,10,5)
-  picks  <- integer(14)
-  drawn <- integer(0)
-  for (p in 1:4) {
-    pr <- combos; pr[drawn] <- 0
-    pr <- pr / sum(pr)
-    w <- sample(14, 1, prob = pr)
-    while (w %in% drawn) w <- sample(14, 1, prob = pr)
-    picks[w] <- p
-    drawn <- c(drawn, w)
-  }
-  rem <- setdiff(1:14, drawn)
-  for (k in seq_along(rem)) picks[rem[k]] <- 4 + k
-  picks
-}
-
-# Seed order for 3-2-1: positions 1..16 are the 16 non-playoff teams, worst to
-# best. balls16 holds each seed's lottery-ball count per the approved table:
-#   seeds 1-3   relegation    2 balls each  (6)
-#   seeds 4-10  non-play-in   3 balls each  (21)
-#   seeds 11-14 9/10 seeds    2 balls each  (8)   <- FOUR teams
-#   seeds 15-16 7v8 losers    1 ball each   (2)
-# Total = 37 balls across 16 seeds.
-balls16 <- c(2,2,2, 3,3,3,3,3,3,3, 2,2,2,2, 1,1)
-
-sim_321_lottery <- function() {
-  picks <- integer(16)
-  drawn <- integer(0)
-  
-  for (p in 1:16) {
-    undrawn <- setdiff(1:16, drawn)
-    releg_remaining <- setdiff(1:3, drawn)
-    
-    # Relegated seeds cannot fall past pick 12. Enforce that constraint while
-    # drawing, rather than repairing with a post-hoc swap. If the number of
-    # undrawn relegated teams equals the number of remaining floor-safe slots,
-    # the next pick must come from the remaining relegated seeds so all can be
-    # seated by #12. Everyone else shifts down naturally.
-    if (p <= 12) {
-      slots_to_floor <- 12 - p + 1
-      eligible <- if (length(releg_remaining) >= slots_to_floor) {
-        releg_remaining
-      } else {
-        undrawn
-      }
-    } else {
-      eligible <- setdiff(undrawn, 1:3)
-      if (length(eligible) == 0) eligible <- undrawn
-    }
-    
-    pr <- balls16
-    pr[setdiff(1:16, eligible)] <- 0
-    pr <- pr / sum(pr)
-    
-    w <- sample(16, 1, prob = pr)
-    picks[w] <- p
-    drawn <- c(drawn, w)
-  }
-  
-  picks
-}
-
-
-# ============================================================================
-# SECTION 11: RANK -> SEEDS, AND THE NEW ANTI-TANK PICK RESTRICTIONS
-# ============================================================================
-# The production team-strength model now simulates a full 30-team standings /
-# draft-rank state. Rank convention:
-#   rank_worst = 1  -> worst record / old lottery seed 1
-#   rank_worst = 30 -> best record / pick 30 by inverse record
+# Monte Carlo of future standings, both lottery systems, pick ownership and
+# pick values, followed by summaries and the dashboard export.
 #
-# Each team first draws a desired future rank from the smoothed 30-rank Markov
-# transition surface. Because independent categorical draws can duplicate a
-# slot or leave a slot empty, resolve_rank_slots() turns those desired ranks
-# into a valid one-team-per-rank permutation by sorting desired rank and using a
-# random tiebreaker. This is equivalent to breaking ties at the duplicated slot
-# and shifting every lower-priority team down into the next available slot.
-
-rank_to_tier_from_worst <- function(rank_worst) {
-  rank_worst <- as.integer(rank_worst)
-  dplyr::case_when(
-    rank_worst <= 3L  ~ "relegation",
-    rank_worst <= 10L ~ "nonplayin",
-    rank_worst <= 14L ~ "playin_seed",
-    rank_worst <= 16L ~ "playin_loser",
-    TRUE              ~ "playoff"
-  )
-}
-
-resolve_rank_slots <- function(desired_rank, teams = names(desired_rank)) {
-  desired_rank <- as.integer(desired_rank)
-  desired_rank <- pmin(pmax(desired_rank, 1L), 30L)
-  if (is.null(teams) || length(teams) != length(desired_rank)) {
-    teams <- all_teams[seq_along(desired_rank)]
-  }
-
-  resolved <- tibble(
-    team = teams,
-    desired_rank = desired_rank,
-    tie_break = runif(length(desired_rank))
-  ) %>%
-    arrange(.data$desired_rank, .data$tie_break) %>%
-    mutate(rank_worst = row_number())
-
-  setNames(as.integer(resolved$rank_worst), resolved$team)
-}
-
-simulate_next_rank_state <- function(current_rank_worst, P_rank) {
-  desired <- vapply(all_teams, function(tm) {
-    i <- as.integer(current_rank_worst[tm])
-    if (is.na(i) || i < 1L || i > nrow(P_rank)) i <- sample(seq_len(nrow(P_rank)), 1)
-    sample(seq_len(nrow(P_rank)), 1, prob = P_rank[i, ])
-  }, integer(1))
-
-  names(desired) <- all_teams
-  rank_worst <- resolve_rank_slots(desired, all_teams)
-  ord <- names(rank_worst)[order(rank_worst)]
-  list(rank_worst = rank_worst, ord = ord, desired_rank = desired)
-}
-
-# Apply the approved restrictions to the full ORIGINAL-team slot permutation,
-# given each team's recent top-pick history.
-#   - cannot receive #1 in consecutive years
-#   - cannot receive a top-5 pick three years running
-# When a restriction binds, the illegal team is bumped down to the first legal
-# slot and every intervening team shifts up one slot. This preserves a valid
-# one-team-per-slot draft order.
-restricted_slot_floor <- function(orig_team, yr, top_pick_history) {
-  hist <- top_pick_history[[orig_team]]
-  got_no1_last  <- !is.null(hist$no1)  && (yr - 1) %in% hist$no1
-  got_top5_2ago <- !is.null(hist$top5) &&
-    all(c(yr - 1, yr - 2) %in% hist$top5)
-  
-  floor_slot <- 1L
-  if (got_no1_last) floor_slot <- max(floor_slot, 2L)
-  if (got_top5_2ago) floor_slot <- max(floor_slot, 6L)
-  floor_slot
-}
-
-restricted_slot_target <- function(slot, orig_team, yr, top_pick_history) {
-  max(as.integer(slot), restricted_slot_floor(orig_team, yr, top_pick_history))
-}
-
-apply_pick_restrictions <- function(slots, yr, top_pick_history) {
-  slots <- as.integer(slots) %>% setNames(names(slots))
-  
-  if (any(is.na(slots))) {
-    warning("Pick restriction input contains NA slots; returning original slots.")
-    return(slots)
-  }
-  
-  # Stable constrained reseating. The earlier iterative bump-and-restart version
-  # could oscillate when two restricted teams traded the same illegal slot back
-  # and forth (e.g., team A cannot pick #1, shifting team B into #1, then team B
-  # is also restricted and shifts A back into #1). This version is equivalent to
-  # repeatedly shifting the next legal team up, while preserving the original
-  # lottery order as much as possible.
-  original_order <- names(slots)[order(slots)]
-  n <- length(original_order)
-  remaining <- original_order
-  out <- setNames(rep(NA_integer_, n), names(slots))
-  
-  min_slot <- setNames(
-    vapply(original_order,
-           function(tm) restricted_slot_floor(tm, yr, top_pick_history),
-           integer(1)),
-    original_order
-  )
-  
-  for (slot in seq_len(n)) {
-    legal_idx <- which(min_slot[remaining] <= slot)
-    
-    if (length(legal_idx) == 0L) {
-      # Should be practically impossible with these rules, but keep the
-      # simulation moving while surfacing the issue if a future rule change or
-      # bad history state creates an infeasible assignment.
-      warning(sprintf(
-        "No legal team available for restricted slot %d in %d; using original order fallback.",
-        slot, yr
-      ))
-      chosen_idx <- 1L
-    } else {
-      chosen_idx <- legal_idx[1]
-    }
-    
-    chosen <- remaining[chosen_idx]
-    out[chosen] <- slot
-    remaining <- remaining[-chosen_idx]
-  }
-  
-  if (anyDuplicated(out) || !identical(sort(as.integer(out)), seq_len(n))) {
-    warning("Pick restriction reseating produced a non-permutation draft order.")
-  }
-  
-  out
-}
-
-# Second-round ordering under each system.
-# Current: inverse record for all 30 slots (31 = worst team, 60 = best team).
-# 3-2-1: the first 16 second-round slots invert the FINAL first-round lottery
-# order; playoff teams then follow inverse record for slots 47-60.
-build_second_round_slots_current <- function(ord) {
-  out <- setNames(rep(NA_integer_, length(all_teams)), all_teams)
-  for (k in seq_along(ord)) out[ord[k]] <- 30L + k
-  out
-}
-
-build_second_round_slots_321 <- function(ord, first_round_slots) {
-  out <- setNames(rep(NA_integer_, length(all_teams)), all_teams)
-  lot16 <- names(first_round_slots)[first_round_slots <= 16]
-  for (tm in lot16) out[tm] <- 47L - as.integer(first_round_slots[tm])
-  nonlot16 <- ord[17:30]
-  for (k in seq_along(nonlot16)) out[nonlot16[k]] <- 46L + k
-  out
-}
-
-# ---- future-pick allocation helpers -----------------------------------------
-# These functions resolve original-team pick ownership in each Monte Carlo draw.
-# They leave the lottery slot attached to the ORIGINAL team, then separately
-# assign that original pick to an owner. That is what allows protections, swap
-# returns, retained own picks, and multi-team ranked pools to flow downstream.
-
-rank_teams_by_slot <- function(slots, teams) {
-  teams <- teams[teams %in% names(slots)]
-  teams[order(as.numeric(slots[teams]), na.last = TRUE)]
-}
-
-normalize_obligation_state <- function(state = NULL) {
-  defaults <- list(
-    mia_2027_frp_conveyed_to_cha = FALSE,
-    den_first_potential_conveyed_to_okc_by_2028 = FALSE,
-    den_first_potential_conveyed_to_okc_by_2029 = FALSE,
-    den_2028_2030_obligation_settled = FALSE
-  )
-
-  if (is.null(state)) return(defaults)
-  modifyList(defaults, state)
-}
-
-update_obligation_state <- function(state, owner_by_orig, yr) {
-  state <- normalize_obligation_state(state)
-
-  if (yr == 2027L) {
-    state$mia_2027_frp_conveyed_to_cha <-
-      identical(unname(owner_by_orig["MIA"]), "CHA")
-  }
-
-  # This tracks DEN first-potential conveyance to OKC through the simulated
-  # first-round allocator. It is used by DEN's later RealGM conditional seconds
-  # and by the 2030 first-round condition.
-  if (yr <= 2028L && identical(unname(owner_by_orig["DEN"]), "OKC")) {
-    state$den_first_potential_conveyed_to_okc_by_2028 <- TRUE
-  }
-  if (yr <= 2029L && identical(unname(owner_by_orig["DEN"]), "OKC")) {
-    state$den_first_potential_conveyed_to_okc_by_2029 <- TRUE
-  }
-
-  # Treat the direct DEN 2028-2030 top-5-protected chain as settled only when
-  # the DEN original pick itself conveys to OKC in one of those future years.
-  if (yr %in% 2028:2030 && identical(unname(owner_by_orig["DEN"]), "OKC")) {
-    state$den_2028_2030_obligation_settled <- TRUE
-  }
-
-  state
-}
-
-apply_simple_future_obligations <- function(owner_by_orig, slots, yr, state = NULL) {
-  state <- normalize_obligation_state(state)
-  rows <- traded_future %>% filter(year == yr, round == 1L)
-
-  # Outright protected/unprotected transfers. If protection does not convey,
-  # owner_by_orig stays as the original team, so the retained own asset receives value.
-  outrights <- rows %>% filter(pick_type == "outright")
-  if (nrow(outrights) > 0) {
-    for (j in seq_len(nrow(outrights))) {
-      og <- outrights$original_team[j]
-      ow <- outrights$owner[j]
-      prot <- outrights$protection[j]
-
-      # DEN top-5-protected chain:
-      # 2028/2029: only if not already settled.
-      # 2030: only if not already settled AND the RealGM by-2028 condition is true.
-      if (identical(og, "DEN") && identical(ow, "OKC") && yr %in% 2028:2030) {
-        if (isTRUE(state$den_2028_2030_obligation_settled)) next
-        if (yr == 2030L && !isTRUE(state$den_first_potential_conveyed_to_okc_by_2028)) next
-      }
-
-      if (!is.na(slots[og]) && pick_conveys(slots[og], prot)) {
-        owner_by_orig[og] <- ow
-      }
-    }
-  }
-
-  # Simple two-team swaps. The holder receives the more favorable original pick;
-  # the counterparty receives the less favorable original pick through the
-  # automatically generated swap_return asset.
-  swaps <- rows %>% filter(pick_type == "swap")
-  if (nrow(swaps) > 0) {
-    for (j in seq_len(nrow(swaps))) {
-      holder <- swaps$owner[j]
-      counter <- swaps$original_team[j]
-      if (is.na(slots[holder]) || is.na(slots[counter])) next
-      if (slots[counter] < slots[holder]) {
-        owner_by_orig[counter] <- holder
-        owner_by_orig[holder]  <- counter
-      } else {
-        owner_by_orig[counter] <- counter
-        owner_by_orig[holder]  <- holder
-      }
-    }
-  }
-
-  owner_by_orig
-}
-
-apply_complex_future_obligations <- function(owner_by_orig, slots, yr, state = NULL) {
-  state <- normalize_obligation_state(state)
-
-  # 2027 ----------------------------------------------------------------------
-  if (yr == 2027L) {
-    # MIL/NOP: best to NOP; other to ATL if 5-30; if both top-4, both to NOP.
-    r <- rank_teams_by_slot(slots, c("MIL", "NOP"))
-    if (length(r) == 2) {
-      owner_by_orig[r[1]] <- "NOP"
-      owner_by_orig[r[2]] <- if (!is.na(slots[r[2]]) && slots[r[2]] <= 4) "NOP" else "ATL"
-    }
-
-    # CLE/MIN/UTA: best MEM, second UTA, least PHX.
-    r <- rank_teams_by_slot(slots, c("CLE", "MIN", "UTA"))
-    if (length(r) == 3) {
-      owner_by_orig[r[1]] <- "MEM"
-      owner_by_orig[r[2]] <- "UTA"
-      owner_by_orig[r[3]] <- "PHX"
-    }
-
-    # SAS: 1-16 SAC, 17-30 OKC.
-    if (!is.na(slots["SAS"])) {
-      owner_by_orig["SAS"] <- if (slots["SAS"] <= 16) "SAC" else "OKC"
-    }
-
-    # OKC/DEN/LAC: DEN participates only if 6-30. If DEN is top-5 it stays DEN.
-    pool <- c("OKC", "LAC")
-    if (!is.na(slots["DEN"]) && slots["DEN"] > 5) {
-      pool <- c(pool, "DEN")
-    } else {
-      owner_by_orig["DEN"] <- "DEN"
-    }
-    r <- rank_teams_by_slot(slots, pool)
-    if (length(r) == 2) {
-      owner_by_orig[r[1]] <- "OKC"
-      owner_by_orig[r[2]] <- "LAC"
-    } else if (length(r) >= 3) {
-      owner_by_orig[r[1:2]] <- "OKC"
-      owner_by_orig[r[3]] <- "LAC"
-    }
-  }
-
-  # 2028 ----------------------------------------------------------------------
-  if (yr == 2028L) {
-    # MIA rollover: MIA 2028 first to CHA if the 2027 MIA 15-30 obligation
-    # did not convey.
-    if (!isTRUE(state$mia_2027_frp_conveyed_to_cha) && !is.na(slots["MIA"])) {
-      owner_by_orig["MIA"] <- "CHA"
-    }
-
-    # ATL/CLE/UTA: more favorable CLE/UTA to UTA; more favorable of ATL and
-    # less favorable CLE/UTA to ATL; least of those two to CLE.
-    cu <- rank_teams_by_slot(slots, c("CLE", "UTA"))
-    if (length(cu) == 2) {
-      owner_by_orig[cu[1]] <- "UTA"
-      atl_pair <- rank_teams_by_slot(slots, c("ATL", cu[2]))
-      if (length(atl_pair) == 2) {
-        owner_by_orig[atl_pair[1]] <- "ATL"
-        owner_by_orig[atl_pair[2]] <- "CLE"
-      }
-    }
-
-    # SAS/BOS: BOS #1 protected from swap; otherwise SAS can take BOS if better.
-    if (!is.na(slots["BOS"]) && !is.na(slots["SAS"]) && slots["BOS"] > 1) {
-      if (slots["BOS"] < slots["SAS"]) {
-        owner_by_orig["BOS"] <- "SAS"
-        owner_by_orig["SAS"] <- "BOS"
-      }
-    }
-
-    # BKN/PHI/PHX/NYK/WAS/MIL/POR nested pool approximation.
-    pool <- c("BKN", "PHX", "NYK")
-    if (!is.na(slots["PHI"]) && slots["PHI"] > 8) {
-      pool <- c(pool, "PHI")
-    } else {
-      owner_by_orig["PHI"] <- "PHI"
-    }
-    r <- rank_teams_by_slot(slots, pool)
-    if (length(r) >= 1) owner_by_orig[r[1]] <- "BKN"
-    if (length(r) >= 2) owner_by_orig[r[2]] <- "BKN"
-    if (length(r) >= 3) owner_by_orig[r[3]] <- "NYK"
-    if (length(r) >= 4) owner_by_orig[r[4]] <- "PHX"
-
-    phx_pick <- names(owner_by_orig)[owner_by_orig == "PHX" & names(owner_by_orig) %in% pool]
-    if (length(phx_pick) > 0 && !is.na(slots["WAS"])) {
-      target <- rank_teams_by_slot(slots, c("WAS", phx_pick[1]))
-      if (length(target) == 2 && target[1] != "WAS") {
-        owner_by_orig[target[1]] <- "WAS"
-        owner_by_orig["WAS"] <- "PHX"
-      }
-    }
-    was_pick <- names(owner_by_orig)[owner_by_orig == "WAS"]
-    was_pick <- was_pick[was_pick %in% c("BKN", "PHI", "PHX", "NYK", "WAS")]
-    if (length(was_pick) > 0 && !is.na(slots["MIL"])) {
-      target <- rank_teams_by_slot(slots, c("MIL", was_pick[1]))
-      if (length(target) == 2 && target[1] != "MIL") {
-        owner_by_orig[target[1]] <- "MIL"
-        owner_by_orig["MIL"] <- "WAS"
-      }
-    }
-  }
-
-  # 2029 ----------------------------------------------------------------------
-  if (yr == 2029L) {
-    r <- rank_teams_by_slot(slots, c("DAL", "HOU", "PHX"))
-    if (length(r) == 3) {
-      owner_by_orig[r[1:2]] <- "HOU"
-      owner_by_orig[r[3]] <- "BKN"
-    }
-
-    r <- rank_teams_by_slot(slots, c("BOS", "MIL", "POR"))
-    if (length(r) == 3) {
-      owner_by_orig[r[c(1, 3)]] <- "POR"
-      owner_by_orig[r[2]] <- "WAS"
-    }
-
-    pool <- c("CLE", "UTA")
-    if (!is.na(slots["MIN"]) && slots["MIN"] > 5) {
-      pool <- c(pool, "MIN")
-    } else {
-      owner_by_orig["MIN"] <- "MIN"
-    }
-    r <- rank_teams_by_slot(slots, pool)
-    if (length(r) == 2) {
-      owner_by_orig[r[1]] <- "UTA"
-      owner_by_orig[r[2]] <- "CHA"
-    } else if (length(r) >= 3) {
-      owner_by_orig[r[1:2]] <- "UTA"
-      owner_by_orig[r[3]] <- "CHA"
-    }
-
-    if (!is.na(slots["ORL"]) && slots["ORL"] > 2 && !is.na(slots["MEM"])) {
-      if (slots["ORL"] < slots["MEM"]) {
-        owner_by_orig["ORL"] <- "MEM"
-        owner_by_orig["MEM"] <- "ORL"
-      }
-    }
-
-    if (!is.na(slots["LAC"]) && slots["LAC"] > 3 && !is.na(slots["PHI"])) {
-      if (slots["LAC"] < slots["PHI"]) {
-        owner_by_orig["LAC"] <- "PHI"
-        owner_by_orig["PHI"] <- "LAC"
-      }
-    }
-  }
-
-  # 2030 ----------------------------------------------------------------------
-  if (yr == 2030L) {
-    wp <- rank_teams_by_slot(slots, c("WAS", "PHX"))
-    if (length(wp) == 2) {
-      owner_by_orig[wp[1]] <- "WAS"
-      rem <- rank_teams_by_slot(slots, c("MEM", wp[2]))
-      if (length(rem) == 2) {
-        owner_by_orig[rem[1]] <- "MEM"
-        owner_by_orig[rem[2]] <- "PHX"
-      }
-    }
-
-    # Exact RealGM DAL/SAS/MIN logic:
-    # SAS gets most favorable of SAS, DAL, and MIN 2-30.
-    # DAL gets less favorable of SAS and DAL.
-    # MIN keeps #1; otherwise MIN gets less favorable of MIN and more favorable SAS/DAL.
-    if (!is.na(slots["MIN"]) && slots["MIN"] == 1) {
-      sd <- rank_teams_by_slot(slots, c("SAS", "DAL"))
-      if (length(sd) == 2) {
-        owner_by_orig[sd[1]] <- "SAS"
-        owner_by_orig[sd[2]] <- "DAL"
-      }
-      owner_by_orig["MIN"] <- "MIN"
-    } else {
-      sd <- rank_teams_by_slot(slots, c("SAS", "DAL"))
-      all3 <- rank_teams_by_slot(slots, c("SAS", "DAL", "MIN"))
-      if (length(sd) == 2 && length(all3) == 3) {
-        best_sd  <- sd[1]
-        worst_sd <- sd[2]
-        best_all <- all3[1]
-
-        owner_by_orig[best_all] <- "SAS"
-        owner_by_orig[worst_sd] <- "DAL"
-
-        min_pick <- if (identical(best_all, "MIN")) best_sd else "MIN"
-        owner_by_orig[min_pick] <- "MIN"
-      }
-    }
-
-    if (!is.na(slots["MIL"]) && !is.na(slots["POR"]) && slots["MIL"] < slots["POR"]) {
-      owner_by_orig["MIL"] <- "POR"
-      owner_by_orig["POR"] <- "MIL"
-    }
-  }
-
-  owner_by_orig
-}
-
-resolve_pick_owners <- function(slots, yr, state = NULL) {
-  state <- normalize_obligation_state(state)
-  owner_by_orig <- setNames(all_teams, all_teams)
-  owner_by_orig <- apply_simple_future_obligations(owner_by_orig, slots, yr, state)
-  owner_by_orig <- apply_complex_future_obligations(owner_by_orig, slots, yr, state)
-  state <- update_obligation_state(state, owner_by_orig, yr)
-  list(owner_by_orig = owner_by_orig, state = state)
-}
-
-first_round_condition_met <- function(condition_id,
-                                      first_owner_by_orig,
-                                      first_slots = NULL,
-                                      obligation_state = NULL) {
-  if (is.na(condition_id) || is.null(condition_id)) return(TRUE)
-  obligation_state <- normalize_obligation_state(obligation_state)
-
-  switch(condition_id,
-         LAL_2027_FRP_TO_MEM     = identical(unname(first_owner_by_orig["LAL"]), "MEM"),
-         LAL_2027_FRP_NOT_TO_MEM = !identical(unname(first_owner_by_orig["LAL"]), "MEM"),
-         DAL_2027_FRP_TO_CHA     = identical(unname(first_owner_by_orig["DAL"]), "CHA"),
-         DAL_2027_FRP_NOT_TO_CHA = !identical(unname(first_owner_by_orig["DAL"]), "CHA"),
-
-         SAS_2027_FRP_TO_SAC     = identical(unname(first_owner_by_orig["SAS"]), "SAC"),
-         SAS_2027_FRP_TO_OKC     = identical(unname(first_owner_by_orig["SAS"]), "OKC"),
-
-         PHI_2028_FRP_RETAINED   = identical(unname(first_owner_by_orig["PHI"]), "PHI"),
-         BOS_2028_FRP_SLOT_1     = !is.null(first_slots) &&
-           !is.na(first_slots["BOS"]) && as.integer(first_slots["BOS"]) == 1L,
-
-         DEN_FRP_CONVEYED_TO_OKC_BY_2029 =
-           isTRUE(obligation_state$den_first_potential_conveyed_to_okc_by_2029),
-
-         DEN_FRP_NOT_CONVEYED_TO_OKC_BY_2029 =
-           !isTRUE(obligation_state$den_first_potential_conveyed_to_okc_by_2029),
-
-         ORL_2029_FRP_RETAINED =
-           !is.null(first_slots) &&
-           !is.na(first_slots["ORL"]) && as.integer(first_slots["ORL"]) <= 2L,
-
-         GSW_2030_FRP_NOT_TO_DAL =
-           !identical(unname(first_owner_by_orig["GSW"]), "DAL"),
-
-         TRUE)
-}
-
-assign_ranked_second_pool <- function(owner_by_orig, slots, teams, owners_by_rank) {
-  r <- rank_teams_by_slot(slots, teams)
-  if (length(r) == 0) return(owner_by_orig)
-  for (k in seq_along(r)) {
-    if (k <= length(owners_by_rank) && !is.na(owners_by_rank[k])) {
-      owner_by_orig[r[k]] <- owners_by_rank[k]
-    }
-  }
-  owner_by_orig
-}
-
-apply_simple_second_obligations <- function(owner_by_orig,
-                                            slots,
-                                            yr,
-                                            first_owner_by_orig,
-                                            first_slots = NULL,
-                                            obligation_state = NULL) {
-  rows <- traded_second %>% filter(year == yr)
-  if (nrow(rows) == 0) return(owner_by_orig)
-
-  for (j in seq_len(nrow(rows))) {
-    og <- rows$original_team[j]
-    ow <- rows$owner[j]
-    prot <- rows$protection[j]
-    cond <- rows$condition_id[j]
-    if (is.na(slots[og])) next
-    if (!first_round_condition_met(cond, first_owner_by_orig, first_slots, obligation_state)) next
-    if (pick_conveys(slots[og], prot)) owner_by_orig[og] <- ow
-  }
-
-  owner_by_orig
-}
-
-apply_complex_second_obligations <- function(owner_by_orig, slots, yr) {
-  if (yr == 2027L) {
-    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("DAL", "BKN"), c("WAS", "DET"))
-
-    r4 <- rank_teams_by_slot(slots, c("HOU", "OKC", "IND", "MIA"))
-    if (length(r4) == 4) {
-      owner_by_orig[r4[1]] <- "PHI"
-      owner_by_orig[r4[2]] <- "NOP"
-      owner_by_orig[r4[3]] <- "NYK"
-      san_pair <- rank_teams_by_slot(slots, c("SAS", r4[4]))
-      if (length(san_pair) == 2) {
-        owner_by_orig[san_pair[1]] <- "SAS"
-        owner_by_orig[san_pair[2]] <- "MIA"
-      }
-    }
-
-    r <- rank_teams_by_slot(slots, c("NOP", "POR"))
-    if (length(r) == 2) {
-      owner_by_orig[r[1]] <- "CHA"
-      owner_by_orig[r[2]] <- if (!is.na(slots[r[2]]) && slots[r[2]] >= 56) "HOU" else "POR"
-    }
-
-    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("ORL", "BOS"), c("UTA", "CHA"))
-    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("PHX", "GSW"), c("PHI", "WAS"))
-  }
-
-  if (yr == 2028L) {
-    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("CHA", "LAC"), c("CHA", "DET"))
-    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("LAL", "WAS"), c("ORL", "WAS"))
-    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("IND", "PHX"), c("IND", "NYK"))
-  }
-
-  if (yr == 2029L) {
-    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("ATL", "MIA"), c("CHA", "OKC"))
-    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("DET", "MIL", "NYK"), c("DET", "DET", "CHI"))
-    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("IND", "WAS"), c("IND", "POR"))
-  }
-
-  if (yr == 2030L) {
-    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("LAC", "UTA"), c("CHA", "UTA"))
-    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("NOP", "ORL"), c("ORL", "NOP"))
-    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("PHX", "POR"), c("PHI", "WAS"))
-  }
-
-  if (yr == 2031L) {
-    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("MIN", "GSW"), c("CHI", "DET"))
-    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("BOS", "CLE"), c("UTA", "BOS"))
-
-    # ATL/HOU protected swap: ATL may swap for HOU only if HOU is 31-55.
-    # HOU 56-60 is handled by the simple BOS convey56_60 row.
-    if (!is.na(slots["HOU"]) && slots["HOU"] <= 55 &&
-        !is.na(slots["ATL"]) && slots["HOU"] < slots["ATL"]) {
-      owner_by_orig["HOU"] <- "ATL"
-      owner_by_orig["ATL"] <- "HOU"
-    }
-
-    # IND/MIA/MEM pool:
-    # more favorable IND/MIA to WAS;
-    # more favorable of MEM and less favorable IND/MIA to MEM;
-    # remaining least favorable to IND.
-    im <- rank_teams_by_slot(slots, c("IND", "MIA"))
-    if (length(im) == 2) {
-      owner_by_orig[im[1]] <- "WAS"
-      mem_pair <- rank_teams_by_slot(slots, c("MEM", im[2]))
-      if (length(mem_pair) == 2) {
-        owner_by_orig[mem_pair[1]] <- "MEM"
-        owner_by_orig[mem_pair[2]] <- "IND"
-      }
-    }
-
-    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("NOP", "ORL"), c("ORL", "OKC"))
-  }
-
-  if (yr == 2032L) {
-    owner_by_orig <- assign_ranked_second_pool(owner_by_orig, slots, c("HOU", "PHX"), c("CHI", "PHX"))
-
-    # MEM/PHI swap: MEM may swap for PHI if PHI's second is better.
-    if (!is.na(slots["MEM"]) && !is.na(slots["PHI"]) && slots["PHI"] < slots["MEM"]) {
-      owner_by_orig["PHI"] <- "MEM"
-      owner_by_orig["MEM"] <- "PHI"
-    }
-  }
-
-  owner_by_orig
-}
-
-resolve_second_pick_owners <- function(slots,
-                                       yr,
-                                       first_owner_by_orig,
-                                       first_slots = NULL,
-                                       obligation_state = NULL) {
-  owner_by_orig <- setNames(all_teams, all_teams)
-  owner_by_orig <- apply_simple_second_obligations(
-    owner_by_orig,
-    slots,
-    yr,
-    first_owner_by_orig,
-    first_slots,
-    obligation_state
-  )
-  owner_by_orig <- apply_complex_second_obligations(owner_by_orig, slots, yr)
-  owner_by_orig
-}
-
-
-value_allocated_future_assets <- function(sim, yr, draft_round, slots, owner_by_orig, d_pick, d_pick2,
-                                          team_value, team_n, team_best,
-                                          system = c("cur", "new")) {
-  system <- match.arg(system)
-  yr_assets <- pick_assets %>%
-    filter(.data$year == .env$yr, .data$round == .env$draft_round)
-  raw_by_orig <- setNames(rep(0, length(all_teams)), all_teams)
-  for (tm in all_teams) {
-    raw_by_orig[tm] <- if (!is.na(slots[tm])) sample_pick_value(slots[tm], draw_idx = d_pick, draw_idx_r2 = d_pick2) else 0
-  }
-  
-  for (j in seq_len(nrow(yr_assets))) {
-    aid <- yr_assets$asset_id[j]
-    og  <- yr_assets$original_team[j]
-    ow  <- yr_assets$owner[j]
-    allocated <- !is.na(owner_by_orig[og]) && owner_by_orig[og] == ow
-    val <- if (allocated) raw_by_orig[og] else 0
-    
-    if (system == "cur") {
-      asset_cur[sim, aid] <<- val
-      asset_slot_cur[sim, aid] <<- slots[og]
-      asset_raw_cur[sim, aid] <<- raw_by_orig[og]
-      asset_ownslot_cur[sim, aid] <<- slots[ow]
-      asset_convey_cur[sim, aid] <<- as.integer(allocated)
-    } else {
-      asset_new[sim, aid] <<- val
-      asset_slot_new[sim, aid] <<- slots[og]
-      asset_raw_new[sim, aid] <<- raw_by_orig[og]
-      asset_ownslot_new[sim, aid] <<- slots[ow]
-      asset_convey_new[sim, aid] <<- as.integer(allocated)
-    }
-    
-    if (allocated) {
-      team_value[ow] <- team_value[ow] + val
-      team_n[ow]     <- team_n[ow] + 1L
-      team_best[ow]  <- max(team_best[ow], val)
-    }
-  }
-  
-  list(team_value = team_value, team_n = team_n, team_best = team_best)
-}
+# Lottery systems:
+#   - Current (pre-2027): 14 teams, weighted combinations, top 4 picks drawn.
+#   - Approved 3-2-1: 16 teams, 2/3/2/1 balls by tier, all 16 picks drawn;
+#     the three worst teams cannot land below #12.
+#
+# Helper functions are in 00_helpers.R, under "HELPERS FIRST CALLED IN
+# 04_lotterySims.R":
+#   - SECTION 10: lottery simulators (sim_current_lottery, sim_321_lottery)
+#   - SECTION 11: pick ownership and valuation (pick_conveys,
+#     resolve_pick_owners, resolve_second_pick_owners, sample_pick_value,
+#     value_allocated_future_assets)
+#   - SECTION 12: Expected Pick Value and display matrices
+#     (asset_value_mean_from_slots, build_display_draw_matrix,
+#     build_display_convey_matrix, keep_display_cols)
 
 
 
@@ -757,6 +36,10 @@ value_allocated_future_assets <- function(sim, yr, draft_round, slots, owner_by_
 #     permutation, resolve swaps, apply protections and the new pick restrictions,
 #     and value every owned pick.
 #
+# Rank convention:
+#   rank_worst = 1  -> worst record / old lottery seed 1
+#   rank_worst = 30 -> best record / pick 30 by inverse record
+#
 # Seeding 2026 baseline rank states from the final 2025-26 standings:
 if (!exists("current_rank_worst0")) {
   current_rank_worst0 <- setNames(
@@ -765,28 +48,10 @@ if (!exists("current_rank_worst0")) {
   )
 }
 
-# Pre-compute the actual 2026 slot value contribution per owner (sampled each
-# sim so 2026 still carries pick-value uncertainty, just not lottery
-# uncertainty). Also returns per-asset values keyed by asset_id.
-value_2026 <- function(d_pick, d_pick2) {
-  v     <- setNames(rep(0, 30), all_teams)
-  nbest <- setNames(rep(-Inf, 30), all_teams)
-  ct    <- setNames(rep(0L, 30), all_teams)
-  asset_val  <- setNames(rep(NA_real_, n_assets), asset_ids)
-  asset_slot <- setNames(rep(NA_real_, n_assets), asset_ids)
-  a26_assets <- pick_assets %>% filter(year == 2026L)
-  for (r in seq_len(nrow(a26_assets))) {
-    own <- a26_assets$owner[r]
-    sl  <- a26_assets$fixed_slot[r]
-    val <- sample_pick_value(sl, draw_idx = d_pick, draw_idx_r2 = d_pick2)
-    v[own]     <- v[own] + val
-    nbest[own] <- max(nbest[own], val)
-    ct[own]    <- ct[own] + 1L
-    asset_val[a26_assets$asset_id[r]]  <- val
-    asset_slot[a26_assets$asset_id[r]] <- sl
-  }
-  list(v = v, best = nbest, n = ct, asset_val = asset_val, asset_slot = asset_slot)
-}
+# Actual 2026 picks: slots are locked, so each sim samples only the player
+# outcome at the fixed slot (pick-value uncertainty, no lottery uncertainty).
+a26_assets <- pick_assets %>% filter(year == 2026L)
+a26_ids    <- a26_assets$asset_id
 
 # Per-asset value stores: [N_SIMS x n_assets] under each system.
 # 2026 assets get identical current/new values; future assets differ.
@@ -830,12 +95,12 @@ team_slot2_new <- array(NA_real_, dim = c(N_SIMS, 30, n_proj_years),
 team_rank_worst <- array(NA_real_, dim = c(N_SIMS, 30, n_proj_years),
                          dimnames = list(NULL, all_teams, as.character(proj_years)))
 sim_curve_par_cols <- c(
-  "alpha", "beta", "gamma", "tau_log_sigma_rw", "nu",
+  "alpha", "beta", "gamma", "tau_eps",
   "eta_31_r2", "tau_pi_r2",
   paste0("mu_", 1:60),
   paste0("sigma_", 1:60),
   paste0("p_play_", 31:60),
-  paste0("r2_cond_played_ws_mean_", 31:60)
+  paste0("r2_cond_played_war_mean_", 31:60)
 )
 sim_curve_par <- matrix(NA_real_, N_SIMS, length(sim_curve_par_cols),
                         dimnames = list(NULL, sim_curve_par_cols))
@@ -860,8 +125,7 @@ for (sim in 1:N_SIMS) {
     pick_draws$alpha[d_pick],
     pick_draws$beta[d_pick],
     pick_draws$gamma[d_pick],
-    pick_draws$tau_log_sigma_rw[d_pick],
-    pick_draws$nu[d_pick],
+    pick_draws$tau_eps[d_pick],
     pick2_draws$eta_31[d_pick2],
     pick2_draws$tau_pi[d_pick2],
     as.numeric(pick_mu_draws[d_pick, ]),
@@ -873,29 +137,35 @@ for (sim in 1:N_SIMS) {
   )
   
   # rank-transition matrix for this sim (rows = current rank_worst, cols = next rank_worst)
-  P <- t(vapply(seq_len(N_RANKS), function(i) get_theta_row(d_mk, i), numeric(N_RANKS)))
-  
-  # accumulators
-  tv_c <- setNames(rep(0, 30), all_teams); tv_n <- tv_c
-  tn_c <- setNames(rep(0L, 30), all_teams); tn_n <- tn_c
-  tb_c <- setNames(rep(-Inf, 30), all_teams); tb_n <- tb_c
-  
-  # 2026 actual (identical under both systems)
-  a26 <- value_2026(d_pick, d_pick2)
-  tv_c <- tv_c + a26$v;  tv_n <- tv_n + a26$v
-  tn_c <- tn_c + a26$n;  tn_n <- tn_n + a26$n
-  tb_c <- pmax(tb_c, a26$best); tb_n <- pmax(tb_n, a26$best)
+  P <- matrix(theta_draws[d_mk, as.vector(theta_cols)], N_RANKS, N_RANKS)
+
+  # accumulators: team total value, number of picks, best single pick value
+  tv_c <- setNames(rep(0, 30), all_teams)
+  tn_c <- setNames(rep(0L, 30), all_teams)
+  tb_c <- setNames(rep(-Inf, 30), all_teams)
+
+  # ---- 2026 actual picks (identical under both systems) ----
+  a26_val <- setNames(numeric(nrow(a26_assets)), a26_ids)
+  for (r in seq_len(nrow(a26_assets))) {
+    own <- a26_assets$owner[r]
+    val <- sample_pick_value(a26_assets$fixed_slot[r], draw_idx = d_pick, draw_idx_r2 = d_pick2)
+    a26_val[r] <- val
+    tv_c[own]  <- tv_c[own] + val
+    tn_c[own]  <- tn_c[own] + 1L
+    tb_c[own]  <- max(tb_c[own], val)
+  }
+  tv_n <- tv_c; tn_n <- tn_c; tb_n <- tb_c
+
   # store per-asset 2026 values (same under both systems). 2026 is locked, so
   # slot == fixed slot, raw value == realized value, and own-slot == slot.
-  a26_ids <- pick_assets$asset_id[pick_assets$year == 2026L]
-  asset_cur[sim, a26_ids] <- a26$asset_val[a26_ids]
-  asset_new[sim, a26_ids] <- a26$asset_val[a26_ids]
-  asset_slot_cur[sim, a26_ids]    <- a26$asset_slot[a26_ids]
-  asset_slot_new[sim, a26_ids]    <- a26$asset_slot[a26_ids]
-  asset_raw_cur[sim, a26_ids]     <- a26$asset_val[a26_ids]
-  asset_raw_new[sim, a26_ids]     <- a26$asset_val[a26_ids]
-  asset_ownslot_cur[sim, a26_ids] <- a26$asset_slot[a26_ids]
-  asset_ownslot_new[sim, a26_ids] <- a26$asset_slot[a26_ids]
+  asset_cur[sim, a26_ids] <- a26_val
+  asset_new[sim, a26_ids] <- a26_val
+  asset_slot_cur[sim, a26_ids]    <- a26_assets$fixed_slot
+  asset_slot_new[sim, a26_ids]    <- a26_assets$fixed_slot
+  asset_raw_cur[sim, a26_ids]     <- a26_val
+  asset_raw_new[sim, a26_ids]     <- a26_val
+  asset_ownslot_cur[sim, a26_ids] <- a26_assets$fixed_slot
+  asset_ownslot_new[sim, a26_ids] <- a26_assets$fixed_slot
   asset_convey_cur[sim, a26_ids] <- 1L
   asset_convey_new[sim, a26_ids] <- 1L
   
@@ -917,12 +187,26 @@ for (sim in 1:N_SIMS) {
   obligation_state_n <- normalize_obligation_state()
   
   for (yr in FIRST_PROJECTED_DRAFT:LAST_PROJECTED_DRAFT) {
-    # Evolve exact standings / draft ranks one year via the smoothed 30-rank
-    # Markov transition surface, then resolve duplicates into a permutation.
-    rank_step <- simulate_next_rank_state(team_rank_state, P)
-    team_rank_state <- rank_step$rank_worst
-    ord <- rank_step$ord                                  # worst -> best
+    # ---- simulate next season's full standings order ----
+    # Each team draws a desired next-season rank from its row of the 30-rank
+    # Markov transition matrix. Independent draws can give two teams the same
+    # rank, so teams are sorted by desired rank with a random tiebreaker; this
+    # gives exactly one team per rank (a tied team shifts down one rank).
+    desired_rank <- setNames(integer(length(all_teams)), all_teams)
+    for (tm in all_teams) {
+      i <- as.integer(team_rank_state[tm])
+      if (is.na(i) || i < 1L || i > N_RANKS) i <- sample(N_RANKS, 1)
+      desired_rank[tm] <- sample(N_RANKS, 1, prob = P[i, ])
+    }
+
+    rank_order <- tibble(team = all_teams,
+                         desired_rank = pmin(pmax(desired_rank, 1L), 30L),
+                         tie_break = runif(length(all_teams))) %>%
+      arrange(desired_rank, tie_break)
+
+    ord <- rank_order$team                                # worst -> best
     rank_of <- setNames(seq_along(ord), ord)              # 1 = worst overall
+    team_rank_state <- rank_of
     
     # ---- CURRENT system seats (14-team lottery) ----
     lot14 <- ord[1:14]
@@ -942,17 +226,64 @@ for (sim in 1:N_SIMS) {
     for (k in seq_along(nonlot16)) slot_n[nonlot16[k]] <- 16 + k
     
     # ---- apply NEW anti-tank restrictions (3-2-1 system only) ----
-    # Restrictions look back at the ORIGINAL team's recent top picks. They do
-    # not change who owns the pick; ownership is resolved below. Reseating is
-    # applied to the full permutation so no two teams can occupy the same slot.
-    slot_n <- apply_pick_restrictions(slot_n, yr, top_hist)
-    
+    # Restrictions look back at the ORIGINAL team's recent top picks:
+    #   - no #1 pick in consecutive years    -> earliest legal slot = 2
+    #   - no top-5 pick three years running  -> earliest legal slot = 6
+    # Slots are refilled in lottery order: each slot goes to the best-placed
+    # remaining team that is allowed to take it, so a restricted team drops to
+    # its first legal slot and the teams behind it move up one slot. The
+    # result is still one team per slot. Restrictions do not change who owns
+    # the pick; ownership is resolved below.
+    restriction_order <- names(slot_n)[order(slot_n)]
+    earliest_legal_slot <- setNames(rep(1L, length(restriction_order)), restriction_order)
+    for (tm in restriction_order) {
+      if ((yr - 1) %in% top_hist[[tm]]$no1) {
+        earliest_legal_slot[tm] <- max(earliest_legal_slot[tm], 2L)
+      }
+      if (all(c(yr - 1, yr - 2) %in% top_hist[[tm]]$top5)) {
+        earliest_legal_slot[tm] <- max(earliest_legal_slot[tm], 6L)
+      }
+    }
+
+    unseated_teams <- restriction_order
+    slot_n_restricted <- setNames(rep(NA_integer_, length(slot_n)), names(slot_n))
+    for (seat in seq_along(restriction_order)) {
+      legal_idx <- which(earliest_legal_slot[unseated_teams] <= seat)
+
+      if (length(legal_idx) == 0L) {
+        # Not reachable under the current rules; keeps the simulation moving
+        # if a future rule change makes the assignment infeasible.
+        warning(sprintf(
+          "No legal team available for restricted slot %d in %d; using original order fallback.",
+          seat, yr
+        ))
+        chosen_idx <- 1L
+      } else {
+        chosen_idx <- legal_idx[1]
+      }
+
+      slot_n_restricted[unseated_teams[chosen_idx]] <- seat
+      unseated_teams <- unseated_teams[-chosen_idx]
+    }
+
+    if (anyDuplicated(slot_n_restricted) ||
+        !identical(sort(as.integer(slot_n_restricted)), seq_along(restriction_order))) {
+      warning("Pick restriction reseating produced a non-permutation draft order.")
+    }
+    slot_n <- slot_n_restricted
+
     # ---- second-round slots -------------------------------------------------
-    # Current system keeps inverse-record order. Under 3-2-1, slots 31-46 are
-    # the inverse of the final 1-16 lottery order, then playoff teams fill 47-60
-    # by inverse record.
-    slot2_c <- build_second_round_slots_current(ord)
-    slot2_n <- build_second_round_slots_321(ord, slot_n)
+    # Current system: inverse record for all 30 slots (31 = worst team,
+    # 60 = best team). Under 3-2-1, the 16 lottery teams get
+    # 47 - final first-round slot (slots 31-46, the inverse of the lottery
+    # result), then playoff teams fill 47-60 by inverse record.
+    slot2_c <- setNames(rep(NA_integer_, length(all_teams)), all_teams)
+    slot2_c[ord] <- 30L + seq_along(ord)
+
+    slot2_n <- setNames(rep(NA_integer_, length(all_teams)), all_teams)
+    lottery_teams_n <- names(slot_n)[slot_n <= 16]
+    slot2_n[lottery_teams_n] <- 47L - as.integer(slot_n[lottery_teams_n])
+    slot2_n[ord[17:30]] <- 46L + seq_along(ord[17:30])
     
     # ---- record realized ORIGINAL-team seats this year ----------------------
     yc <- as.character(yr)
@@ -1042,76 +373,78 @@ all_res <- bind_rows(results)
 cat("Simulations complete.\n")
 
 # ---- structural validation tests before export ------------------------------
-validate_round_aware_outputs <- function() {
-  r1_cols <- pick_assets$round == 1L
-  r2_cols <- pick_assets$round == 2L
-  
-  r1_slots <- as.vector(asset_slot_new[, r1_cols, drop = FALSE])
-  r2_slots <- as.vector(asset_slot_new[, r2_cols, drop = FALSE])
-  
-  bad_first <- sum(!is.na(r1_slots) & !(r1_slots %in% 1:30))
-  bad_second <- sum(!is.na(r2_slots) & !(r2_slots %in% 31:60))
-  if (bad_first > 0) stop("Round-1 assets have non-1:30 slots.", call. = FALSE)
-  if (bad_second > 0) {
-    bad_second_cols <- which(r2_cols)[colSums(!is.na(asset_slot_new[, r2_cols, drop = FALSE]) &
-                                                !(asset_slot_new[, r2_cols, drop = FALSE] %in% 31:60)) > 0]
-    bad_examples <- head(pick_assets$asset_id[bad_second_cols], 10)
-    stop(sprintf(
-      "Round-2 assets have non-31:60 slots. This usually means a first-round slot write leaked into round-2 asset columns. Examples: %s",
-      paste(bad_examples, collapse = ", ")
-    ), call. = FALSE)
-  }
-  
-  # 3-2-1 second-round inversion: for every projected sim-year, each lottery
-  # team's second-round slot should equal 47 - final first-round slot.
-  inv_bad <- 0L
-  for (yr in as.character(proj_years)) {
-    fr <- team_slot_new[, , yr]
-    sr <- team_slot2_new[, , yr]
-    lot_idx <- which(!is.na(fr) & fr <= 16, arr.ind = TRUE)
-    if (nrow(lot_idx) > 0) {
-      inv_bad <- inv_bad + sum(sr[lot_idx] != 47L - fr[lot_idx], na.rm = TRUE)
-    }
-  }
-  if (inv_bad > 0) stop("3-2-1 second-round inversion validation failed.", call. = FALSE)
-  
-  # Every projected sim-year must contain exactly one team in each of the 30
-  # rank slots. This guards against duplicate/gap errors after categorical rank
-  # draws are resolved into a standings permutation.
-  rank_bad <- 0L
-  old_nonlot_bad <- 0L
-  new_nonlot_bad <- 0L
-  for (yr in as.character(proj_years)) {
-    rk <- team_rank_worst[, , yr]
-    sc <- team_slot_cur[, , yr]
-    sn <- team_slot_new[, , yr]
-    for (rr in seq_len(nrow(rk))) {
-      if (!identical(sort(as.integer(rk[rr, ])), 1:30)) rank_bad <- rank_bad + 1L
+# Each check stops the script if it fails:
+#   - round-1 assets only use slots 1-30; round-2 assets only use 31-60
+#   - 3-2-1 second round: each lottery team's slot = 47 - final first-round slot
+#   - every sim-year standings order is a 1:30 permutation
+#   - non-lottery teams keep inverse-record slots (15-30 current, 17-30 3-2-1)
+#   - every pick asset has round 1 or 2
+r1_cols <- pick_assets$round == 1L
+r2_cols <- pick_assets$round == 2L
 
-      # Old/current system: non-lottery teams receive picks 15-30 by inverse
-      # record, so simulated rank_worst 15 maps to pick 15 and rank_worst 30
-      # maps to pick 30.
-      old_idx <- which(rk[rr, ] >= 15)
-      old_nonlot_bad <- old_nonlot_bad + sum(sc[rr, old_idx] != rk[rr, old_idx], na.rm = TRUE)
+r1_slots <- as.vector(asset_slot_new[, r1_cols, drop = FALSE])
+r2_slots <- as.vector(asset_slot_new[, r2_cols, drop = FALSE])
 
-      # 3-2-1 system: ranks 17-30 are non-lottery and keep inverse-record
-      # slots 17-30 after the 16-team lottery is drawn.
-      new_idx <- which(rk[rr, ] >= 17)
-      new_nonlot_bad <- new_nonlot_bad + sum(sn[rr, new_idx] != rk[rr, new_idx], na.rm = TRUE)
-    }
-  }
-  if (rank_bad > 0) stop("Rank-state validation failed: at least one sim-year is not a 1:30 permutation.", call. = FALSE)
-  if (old_nonlot_bad > 0) stop("Old-system non-lottery inverse-record validation failed.", call. = FALSE)
-  if (new_nonlot_bad > 0) stop("3-2-1 non-lottery inverse-record validation failed.", call. = FALSE)
-
-  if (any(is.na(pick_assets$round)) || any(!pick_assets$round %in% c(1L, 2L))) {
-    stop("pick_assets has missing or invalid round values.", call. = FALSE)
-  }
-  
-  TRUE
+bad_first <- sum(!is.na(r1_slots) & !(r1_slots %in% 1:30))
+bad_second <- sum(!is.na(r2_slots) & !(r2_slots %in% 31:60))
+if (bad_first > 0) stop("Round-1 assets have non-1:30 slots.", call. = FALSE)
+if (bad_second > 0) {
+  bad_second_cols <- which(r2_cols)[colSums(!is.na(asset_slot_new[, r2_cols, drop = FALSE]) &
+                                              !(asset_slot_new[, r2_cols, drop = FALSE] %in% 31:60)) > 0]
+  bad_examples <- head(pick_assets$asset_id[bad_second_cols], 10)
+  stop(sprintf(
+    "Round-2 assets have non-31:60 slots. This usually means a first-round slot write leaked into round-2 asset columns. Examples: %s",
+    paste(bad_examples, collapse = ", ")
+  ), call. = FALSE)
 }
 
-round_validation_passed <- validate_round_aware_outputs()
+# 3-2-1 second-round inversion: for every projected sim-year, each lottery
+# team's second-round slot should equal 47 - final first-round slot.
+inv_bad <- 0L
+for (yc in as.character(proj_years)) {
+  fr <- team_slot_new[, , yc]
+  sr <- team_slot2_new[, , yc]
+  lot_idx <- which(!is.na(fr) & fr <= 16, arr.ind = TRUE)
+  if (nrow(lot_idx) > 0) {
+    inv_bad <- inv_bad + sum(sr[lot_idx] != 47L - fr[lot_idx], na.rm = TRUE)
+  }
+}
+if (inv_bad > 0) stop("3-2-1 second-round inversion validation failed.", call. = FALSE)
+
+# Every projected sim-year must contain exactly one team in each of the 30
+# rank slots. This guards against duplicate/gap errors after categorical rank
+# draws are resolved into a standings permutation.
+rank_bad <- 0L
+old_nonlot_bad <- 0L
+new_nonlot_bad <- 0L
+for (yc in as.character(proj_years)) {
+  rk <- team_rank_worst[, , yc]
+  sc <- team_slot_cur[, , yc]
+  sn <- team_slot_new[, , yc]
+  for (rr in seq_len(nrow(rk))) {
+    if (!identical(sort(as.integer(rk[rr, ])), 1:30)) rank_bad <- rank_bad + 1L
+
+    # Old/current system: non-lottery teams receive picks 15-30 by inverse
+    # record, so simulated rank_worst 15 maps to pick 15 and rank_worst 30
+    # maps to pick 30.
+    old_idx <- which(rk[rr, ] >= 15)
+    old_nonlot_bad <- old_nonlot_bad + sum(sc[rr, old_idx] != rk[rr, old_idx], na.rm = TRUE)
+
+    # 3-2-1 system: ranks 17-30 are non-lottery and keep inverse-record
+    # slots 17-30 after the 16-team lottery is drawn.
+    new_idx <- which(rk[rr, ] >= 17)
+    new_nonlot_bad <- new_nonlot_bad + sum(sn[rr, new_idx] != rk[rr, new_idx], na.rm = TRUE)
+  }
+}
+if (rank_bad > 0) stop("Rank-state validation failed: at least one sim-year is not a 1:30 permutation.", call. = FALSE)
+if (old_nonlot_bad > 0) stop("Old-system non-lottery inverse-record validation failed.", call. = FALSE)
+if (new_nonlot_bad > 0) stop("3-2-1 non-lottery inverse-record validation failed.", call. = FALSE)
+
+if (any(is.na(pick_assets$round)) || any(!pick_assets$round %in% c(1L, 2L))) {
+  stop("pick_assets has missing or invalid round values.", call. = FALSE)
+}
+
+round_validation_passed <- TRUE
 cat("Round-aware slot/allocation validation passed.\n")
 
 
@@ -1127,36 +460,9 @@ asset_raw_new[is.na(asset_raw_new)] <- 0
 
 # Expected Asset Value (EV) matrices: same simulated pick slots / conveyance
 # events, but valued with the posterior mean slot curve instead of a sampled
-# player-level Student-t outcome. These are the team / pick values shown when
+# player-level outcome draw. These are the team / pick values shown when
 # the app toggles to "Expected Asset Value" and match the left-side Trade
 # Machine interpretation.
-asset_value_mean_from_slots <- function(slot_mat, convey_mat) {
-  out <- matrix(
-    0,
-    nrow = nrow(slot_mat),
-    ncol = ncol(slot_mat),
-    dimnames = dimnames(slot_mat)
-  )
-  
-  mu_mat <- as.matrix(sim_curve_par[, paste0("mu_", 1:60), drop = FALSE])
-  
-  for (aid in colnames(slot_mat)) {
-    slots <- as.integer(slot_mat[, aid])
-    active <- !is.na(slots)
-    if (!is.null(convey_mat) && aid %in% colnames(convey_mat)) {
-      active <- active & convey_mat[, aid] > 0
-    }
-    if (any(active)) {
-      idx <- which(active)
-      slot_idx <- pmin(pmax(slots[idx], 1L), 60L)
-      out[idx, aid] <- mu_mat[cbind(idx, slot_idx)]
-    }
-  }
-  
-  out[is.na(out)] <- 0
-  out
-}
-
 asset_cur_ev <- asset_value_mean_from_slots(asset_slot_cur, asset_convey_cur)
 asset_new_ev <- asset_value_mean_from_slots(asset_slot_new, asset_convey_new)
 
@@ -1201,52 +507,6 @@ pick_value_ev_summary <- pick_assets %>%
 # Summed display-entitlement matrices. These collapse mutually exclusive or
 # grouped internal assets into one user-facing pick, without changing the team
 # portfolio totals already computed above.
-build_display_draw_matrix <- function(draw_mat, display_members, display_assets) {
-  out <- matrix(
-    0,
-    nrow = nrow(draw_mat),
-    ncol = nrow(display_assets),
-    dimnames = list(NULL, display_assets$display_asset_id)
-  )
-  
-  for (did in display_assets$display_asset_id) {
-    ids <- display_members %>%
-      filter(.data$display_asset_id == .env$did) %>%
-      pull(asset_id)
-    ids <- ids[ids %in% colnames(draw_mat)]
-    if (length(ids) == 1L) {
-      out[, did] <- draw_mat[, ids]
-    } else if (length(ids) > 1L) {
-      out[, did] <- rowSums(draw_mat[, ids, drop = FALSE])
-    }
-  }
-  out
-}
-
-build_display_convey_matrix <- function(convey_mat, display_members, display_assets) {
-  out <- matrix(
-    0,
-    nrow = nrow(convey_mat),
-    ncol = nrow(display_assets),
-    dimnames = list(NULL, display_assets$display_asset_id)
-  )
-  
-  for (did in display_assets$display_asset_id) {
-    ids <- display_members %>%
-      filter(.data$display_asset_id == .env$did) %>%
-      pull(asset_id)
-    ids <- ids[ids %in% colnames(convey_mat)]
-    if (length(ids) == 1L) {
-      out[, did] <- convey_mat[, ids]
-    } else if (length(ids) > 1L) {
-      # Some entitlements can produce two picks in rare protected/ranked-pool
-      # scenarios, so keep the count rather than forcing a 0/1 indicator.
-      out[, did] <- rowSums(convey_mat[, ids, drop = FALSE])
-    }
-  }
-  out
-}
-
 display_asset_cur_full <- build_display_draw_matrix(asset_cur, pick_display_members, pick_display_assets)
 display_asset_new_full <- build_display_draw_matrix(asset_new, pick_display_members, pick_display_assets)
 display_asset_cur_ev_full <- build_display_draw_matrix(asset_cur_ev, pick_display_members, pick_display_assets)
@@ -1282,11 +542,6 @@ if (nrow(hidden_zero_convey_display_assets) > 0) {
     "Hiding %d zero-conveyance display-only pick rows from user-facing selectors\n",
     nrow(hidden_zero_convey_display_assets)
   ))
-}
-
-keep_display_cols <- function(mat, ids) {
-  ids <- ids[ids %in% colnames(mat)]
-  mat[, ids, drop = FALSE]
 }
 
 pick_display_assets <- pick_display_assets %>%
@@ -1384,8 +639,29 @@ cat(sprintf("Stored %d joint draws per asset for trade analysis\n", n_keep))
 tier_map <- current_standings %>%
   transmute(abbr, tier = as.character(tier), wins, losses, overall_rank)
 
-summary_df <- all_res %>%
-  group_by(team) %>%
+# Team totals per simulation under Expected Pick Value: sum of each team's
+# asset EPV columns; best = largest single-asset EPV. Pick counts are the same
+# allocations as the outcome draws, so they come from all_res.
+team_ev_res <- map_dfr(all_teams, function(tm) {
+  cols <- which(pick_assets$owner == tm)
+  cur_sub <- asset_cur_ev[, cols, drop = FALSE]
+  new_sub <- asset_new_ev[, cols, drop = FALSE]
+  tibble(team          = tm,
+         sim_id        = seq_len(nrow(cur_sub)),
+         current_total = rowSums(cur_sub),
+         new_total     = rowSums(new_sub),
+         current_best  = if (length(cols) > 0) apply(cur_sub, 1, max, na.rm = TRUE) else NA_real_,
+         new_best      = if (length(cols) > 0) apply(new_sub, 1, max, na.rm = TRUE) else NA_real_)
+}) %>%
+  left_join(all_res %>% select(team, sim_id, current_n, new_n),
+            by = c("team", "sim_id"))
+
+# Team summaries for both value modes:
+#   - "outcome": sampled player outcomes (all_res)
+#   - "ev":      Expected Pick Value (team_ev_res)
+team_value_summary <- bind_rows(all_res %>% mutate(value_mode = "outcome"),
+                                team_ev_res %>% mutate(value_mode = "ev")) %>%
+  group_by(value_mode, team) %>%
   summarise(
     current_mean   = mean(current_total),
     current_median = median(current_total),
@@ -1410,57 +686,17 @@ summary_df <- all_res %>%
     sigma_change   = sd(new_total) - sd(current_total),
     .groups        = "drop"
   ) %>%
-  left_join(tier_map, by = c("team" = "abbr")) %>%
+  left_join(tier_map, by = c("team" = "abbr"))
+
+summary_df <- team_value_summary %>%
+  filter(value_mode == "outcome") %>%
+  select(-value_mode) %>%
   arrange(desc(delta_value))
 
-build_team_summary_from_asset_draws <- function(cur_mat, new_mat, base_summary) {
-  purrr::map_dfr(all_teams, function(tm) {
-    cols <- which(pick_assets$owner == tm)
-    if (length(cols) == 0) {
-      cur_total <- rep(0, nrow(cur_mat))
-      new_total <- rep(0, nrow(new_mat))
-      cur_best <- rep(NA_real_, nrow(cur_mat))
-      new_best <- rep(NA_real_, nrow(new_mat))
-    } else {
-      cur_sub <- cur_mat[, cols, drop = FALSE]
-      new_sub <- new_mat[, cols, drop = FALSE]
-      cur_total <- rowSums(cur_sub)
-      new_total <- rowSums(new_sub)
-      cur_best <- apply(cur_sub, 1, max, na.rm = TRUE)
-      new_best <- apply(new_sub, 1, max, na.rm = TRUE)
-    }
-    
-    base_row <- base_summary %>% filter(team == tm)
-    tibble(
-      team = tm,
-      current_mean   = mean(cur_total),
-      current_median = median(cur_total),
-      current_sd     = sd(cur_total),
-      current_q05    = quantile(cur_total, 0.05),
-      current_q25    = quantile(cur_total, 0.25),
-      current_q75    = quantile(cur_total, 0.75),
-      current_q95    = quantile(cur_total, 0.95),
-      new_mean       = mean(new_total),
-      new_median     = median(new_total),
-      new_sd         = sd(new_total),
-      new_q05        = quantile(new_total, 0.05),
-      new_q25        = quantile(new_total, 0.25),
-      new_q75        = quantile(new_total, 0.75),
-      new_q95        = quantile(new_total, 0.95),
-      n_picks_mean   = base_row$n_picks_mean[1],
-      best_current   = mean(cur_best, na.rm = TRUE),
-      best_new       = mean(new_best, na.rm = TRUE),
-      delta_value    = mean(new_total) - mean(cur_total),
-      delta_pct      = (mean(new_total) / pmax(mean(cur_total), 0.01) - 1) * 100,
-      delta_quality  = mean(new_best, na.rm = TRUE) - mean(cur_best, na.rm = TRUE),
-      sigma_change   = sd(new_total) - sd(cur_total)
-    )
-  }) %>%
-    left_join(tier_map, by = c("team" = "abbr")) %>%
-    arrange(desc(delta_value))
-}
-
-summary_ev <- build_team_summary_from_asset_draws(asset_cur_ev, asset_new_ev, summary_df)
+summary_ev <- team_value_summary %>%
+  filter(value_mode == "ev") %>%
+  select(-value_mode) %>%
+  arrange(desc(delta_value))
 
 # ---- lottery odds tables (independent of team identities) ----
 cat("\n--- Computing Lottery Odds Tables ---\n")
@@ -1487,31 +723,28 @@ lottery_seed_tiers <- tibble(
   )
 )
 
-summarise_lottery_seed <- function(x) {
-  tibble(
-    expected_pick = mean(x),
-    expected_pick_se = sd(x) / sqrt(length(x)),
-    prob_no1  = mean(x == 1),
-    prob_top3 = mean(x <= 3),
-    prob_top5 = mean(x <= 5),
-    prob_top10 = mean(x <= 10),
-    prob_no1_se  = sqrt(prob_no1 * (1 - prob_no1) / length(x)),
-    prob_top3_se = sqrt(prob_top3 * (1 - prob_top3) / length(x)),
-    prob_top5_se = sqrt(prob_top5 * (1 - prob_top5) / length(x)),
-    prob_top10_se = sqrt(prob_top10 * (1 - prob_top10) / length(x))
-  )
-}
-
-lottery_dist <- bind_rows(
-  map_dfr(1:14, function(s) {
-    summarise_lottery_seed(cur_sims[, s]) %>%
-      mutate(seed = s, system = "Current", .before = 1)
-  }),
-  map_dfr(1:16, function(s) {
-    summarise_lottery_seed(new_sims[, s]) %>%
-      mutate(seed = s, system = "Proposed 3-2-1", .before = 1)
-  })
-) %>%
+# Pick distribution per lottery seed: expected pick, P(#1 / top 3 / top 5 /
+# top 10), and Monte Carlo standard errors. Long format: one row per
+# (system, seed, lottery draw).
+lottery_dist <- bind_rows(tibble(system = "Current",
+                                 seed   = rep(1:14, each = N_LOT),
+                                 pick   = as.vector(cur_sims)),
+                          tibble(system = "Proposed 3-2-1",
+                                 seed   = rep(1:16, each = N_LOT),
+                                 pick   = as.vector(new_sims))) %>%
+  group_by(system, seed) %>%
+  summarise(expected_pick    = mean(pick),
+            expected_pick_se = sd(pick) / sqrt(n()),
+            prob_no1         = mean(pick == 1),
+            prob_top3        = mean(pick <= 3),
+            prob_top5        = mean(pick <= 5),
+            prob_top10       = mean(pick <= 10),
+            prob_no1_se      = sqrt(prob_no1 * (1 - prob_no1) / n()),
+            prob_top3_se     = sqrt(prob_top3 * (1 - prob_top3) / n()),
+            prob_top5_se     = sqrt(prob_top5 * (1 - prob_top5) / n()),
+            prob_top10_se    = sqrt(prob_top10 * (1 - prob_top10) / n()),
+            .groups          = "drop") %>%
+  relocate(seed, .before = system) %>%
   left_join(lottery_seed_tiers, by = "seed")
 
 # Published aggregate 3-2-1 odds table. These are tier-level values because
@@ -1627,8 +860,9 @@ stan_diagnostics <- list(
     alpha       = round(mean(pick_draws$alpha), 2),
     beta        = round(mean(pick_draws$beta), 4),
     gamma       = round(mean(pick_draws$gamma), 2),
-    tau_log_sigma_rw = round(mean(pick_draws$tau_log_sigma_rw), 4),
-    nu               = round(mean(pick_draws$nu), 2),
+    tau_eps          = round(mean(pick_draws$tau_eps), 4),
+    tau_sd           = round(mean(pick_draws$tau_sd), 4),
+    tau_r            = round(mean(pick_draws$tau_r), 4),
     sigma_pick_1     = round(mean(pick_sd_draws[, 1]), 2),
     sigma_pick_5     = round(mean(pick_sd_draws[, 5]), 2),
     sigma_pick_10    = round(mean(pick_sd_draws[, 10]), 2),
@@ -1641,7 +875,7 @@ stan_diagnostics <- list(
     loo_best_model = pick_loo_compare_tbl$model[1],
     loo_compare = pick_loo_compare_tbl,
     loo_summary = pick_loo_summary,
-    curve_type  = "Bayesian Student-t player-level Stan with adjacent-pick sigma smoothing"
+    curve_type  = "Bayesian ex-Gaussian: strictly decreasing mean curve (power-law gaps with adjacent-pick random-walk departures); outcome SD and skew follow second-order random walks (smooth trends across picks)"
   ),
   pick2_model = list(
     eta_31           = round(mean(pick2_draws$eta_31), 3),
@@ -1649,9 +883,9 @@ stan_diagnostics <- list(
     p_play_31        = round(mean(pick2_p_play_draws[, 1]), 3),
     p_play_45        = round(mean(pick2_p_play_draws[, 15]), 3),
     p_play_60        = round(mean(pick2_p_play_draws[, 30]), 3),
-    cond_ws_mean_31  = round(mean(pick2_cond_mu_draws[, 1]), 2),
-    cond_ws_mean_45  = round(mean(pick2_cond_mu_draws[, 15]), 2),
-    cond_ws_mean_60  = round(mean(pick2_cond_mu_draws[, 30]), 2),
+    cond_war_mean_31  = round(mean(pick2_cond_mu_draws[, 1]), 2),
+    cond_war_mean_45  = round(mean(pick2_cond_mu_draws[, 15]), 2),
+    cond_war_mean_60  = round(mean(pick2_cond_mu_draws[, 30]), 2),
     sigma_pick_31    = round(mean(pick2_sd_draws[, 1]), 2),
     sigma_pick_45    = round(mean(pick2_sd_draws[, 15]), 2),
     sigma_pick_60    = round(mean(pick2_sd_draws[, 30]), 2),
@@ -1660,22 +894,18 @@ stan_diagnostics <- list(
     max_rhat         = round(max(pick2_diag$rhat, na.rm = TRUE), 4),
     min_ess          = round(min(pick2_diag$ess_bulk, na.rm = TRUE)),
     ppc_cover        = round(mean(ppc_tbl_r2$covered), 3),
-    ppc_level        = "round-2 right-skew hurdle posterior predictive player rows",
-    ws_floor         = round(R2_WS_FLOOR, 2),
-    upside_prob_31   = round(mean(pick2_upside_prob_draws[, 1]), 3),
-    upside_prob_45   = round(mean(pick2_upside_prob_draws[, 15]), 3),
-    upside_prob_60   = round(mean(pick2_upside_prob_draws[, 30]), 3),
-    d_u              = round(mean(pick2_draws$d_u), 4),
-    upside_multiplier = round(mean(exp(pick2_draws$delta)), 2),
-    kappa            = round(mean(pick2_draws$kappa), 2),
+    ppc_level        = "round-2 hurdle posterior predictive player rows",
+    mean_play_31     = round(mean(pick2_cond_mu_draws[, 1]), 2),
+    mean_play_60     = round(mean(pick2_cond_mu_draws[, 30]), 2),
+    tau_eps          = round(mean(pick2_draws$tau_eps), 4),
     loo_summary      = tibble(
-      model = "round2_right_skew_hurdle_ws",
+      model = "round2_hurdle_mixture",
       elpd_loo = loo_pick_r2$estimates["elpd_loo", "Estimate"],
       p_loo = loo_pick_r2$estimates["p_loo", "Estimate"],
       looic = loo_pick_r2$estimates["looic", "Estimate"],
       max_pareto_k = max(loo::pareto_k_values(loo_pick_r2), na.rm = TRUE)
     ),
-    curve_type = "Bayesian second-round right-skew hurdle: adjacent-pick P(play), shifted-lognormal played outcomes, and pick-declining rare-upside component"
+    curve_type = "Bayesian second-round hurdle: adjacent-pick P(play), a strictly decreasing pooled-gap expected-value curve, and fringe/contributor played outcomes (Normal fringe + exponential contributor upside; share, upside and spread follow adjacent-pick random walks)"
   ),
   markov_model = list(
     state_type    = "30-rank smoothed softmax",
@@ -1718,7 +948,6 @@ dashboard_data <- list(
   complex_second_groups = complex_second_groups,
   complex_second_assets = complex_second_assets,
   owned_future      = owned_future,
-  roster_info       = roster_info,
   pick_assets       = pick_assets,
   pick_value_summary = pick_value_summary,
   pick_value_ev_summary = pick_value_ev_summary,
@@ -1761,7 +990,16 @@ dashboard_data <- list(
     draft_years = sprintf("2026 actual + %d-%d projected",
                           FIRST_PROJECTED_DRAFT, LAST_PROJECTED_DRAFT),
     system_note = "2026 actual results; 3-2-1 effective 2027-2029",
-    model_note  = "Bayesian 30-rank smoothed-softmax Markov chain + round-1 Student-t pick curve + round-2 declining-upside right-skew hurdle pick curve",
+    model_note  = "Bayesian 30-rank smoothed-softmax Markov chain + round-1 ex-Gaussian with a strictly decreasing pooled-gap mean curve + round-2 hurdle with a strictly decreasing pooled-gap EV curve and fringe/contributor played outcomes",
+    value_metric      = "xrapm_war",
+    value_metric_label = "xRAPM wins above replacement",
+    value_unit_short  = "xRAPM WAR",
+    value_window      = sprintf("four rookie-contract seasons after the draft (draft+1 to draft+%d)",
+                                VALUE_WINDOW_SEASONS),
+    xrapm_replacement = XRAPM_REPLACEMENT,
+    points_per_win    = POINTS_PER_WIN,
+    fit_draft_years   = range(draft_years),
+    xrapm_match       = xrapm_match_summary,
     tiers       = TIERS,
     markov_state_type = "rank_worst_1_to_30",
     n_picks     = nrow(owned_future) + nrow(actual_2026_order) + nrow(actual_2026_second_order),
@@ -1779,7 +1017,7 @@ cat("============================================================\n\n")
 
 # ---- console summary ----
 cat(sprintf("%-6s %-13s %5s %9s %10s %8s %7s\n",
-            "Team", "Tier", "W-L", "Cur WS", "3-2-1 WS", "Delta", "Pct"))
+            "Team", "Tier", "W-L", "Cur WAR", "3-2-1 WAR", "Delta", "Pct"))
 cat(strrep("-", 64), "\n")
 for (i in seq_len(nrow(summary_df))) {
   r <- summary_df[i, ]

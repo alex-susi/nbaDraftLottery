@@ -89,59 +89,13 @@ actual_2026_second_order <- tribble(~slot, ~owner, ~original_team,
 # tagged so the owner takes the more favorable slot.
 #
 # NEW-RULE NOTE: under the approved system, picks may NOT be protected in the
-# 12-15 band. None of the encoded protections fall in that band; the helper
-# below also hard-blocks any such protection if added later.
-
-
-
-# protection evaluator: TRUE if the pick conveys to the new owner at `pos`.
-# First-round protections keep the familiar top-N language. Second-round
-# protections are usually written as protected ranges like 31-55, so those are
-# handled explicitly as well.
-pick_conveys <- function(pos, protection) {
-  if (length(pos) == 0 || is.na(pos)) return(FALSE)
-  if (is.null(protection) || length(protection) == 0 || is.na(protection)) return(TRUE)
-  protection <- as.character(protection)
-  if (protection == "none") return(TRUE)
-  if (protection == "top1")   return(pos > 1)
-  if (protection == "top2")   return(pos > 2)
-  if (protection == "top3")   return(pos > 3)
-  if (protection == "top4")   return(pos > 4)
-  if (protection == "top5")   return(pos > 5)
-  if (protection == "top6")   return(pos > 6)
-  if (protection == "top8")   return(pos > 8)
-  if (protection == "top10")  return(pos > 10)
-  if (protection == "top16")  return(pos > 16)
-  if (protection == "top20")  return(pos > 20)
-  if (protection == "lottery") return(pos > 14)
-  
-  # Second-round protected ranges: e.g. protected31_55 means the pick conveys
-  # only if it lands outside 31-55. Since second-round slots are 31-60, that is
-  # equivalent to conveying at 56-60.
-  m <- stringr::str_match(protection, "^protected(\\d+)_(\\d+)$")
-  if (!is.na(m[1, 1])) {
-    lo <- as.integer(m[1, 2])
-    hi <- as.integer(m[1, 3])
-    return(!(pos >= lo && pos <= hi))
-  }
-  
-  # Explicit conveyance range, useful for clauses like "if 56-60".
-  m <- stringr::str_match(protection, "^convey(\\d+)_(\\d+)$")
-  if (!is.na(m[1, 1])) {
-    lo <- as.integer(m[1, 2])
-    hi <- as.integer(m[1, 3])
-    return(pos >= lo && pos <= hi)
-  }
-  
-  TRUE
-}
-
-# Validate the new "no 12-15 protection" rule for any first-round protection we encode.
-protection_floor <- function(protection) {
-  switch(protection,
-         top1 = 1, top2 = 2, top3 = 3, top4 = 4, top5 = 5, top6 = 6,
-         top8 = 8, top10 = 10, lottery = 14, top16 = 16, top20 = 20, 0)
-}
+# 12-15 band. None of the encoded protections fall in that band; the check
+# using protection_floor() (00_helpers.R) also blocks any such protection if
+# added later.
+#
+# Protection codes are evaluated during simulation by pick_conveys()
+# (00_helpers.R): "top1".."top20" and "lottery" for first-round picks,
+# "protectedLO_HI" / "conveyLO_HI" ranges for second-round picks.
 
 traded_future <- tribble(
   ~owner, ~original_team, ~year, ~protection, ~pick_type, ~notes,
@@ -218,20 +172,8 @@ complex_future_groups <- tribble(~year, ~group_id, ~notes,
                                  2030, "MIL_POR",                  
                                  "POR may swap with MIL")
 
-make_complex_assets <- function(year, group_id, original_teams, possible_owners, notes) {
-  tidyr::expand_grid(owner = possible_owners,
-                     original_team = original_teams) %>%
-    filter(owner != original_team) %>%
-    transmute(owner,
-              original_team,
-              year = as.integer(year),
-              protection = "complex",
-              pick_type = "complex",
-              notes = notes,
-              complex_group = group_id,
-              round = 1L)
-}
-
+# One row per possible owner x original team in each pool
+# (make_complex_assets() and make_complex_second_assets() in 00_helpers.R)
 complex_future_assets <- bind_rows(
   make_complex_assets(2027, "MIL_NOP_ATL", c("MIL", "NOP"), c("NOP", "ATL"),
                       "MIL/NOP ranked pool: best to NOP; other to ATL unless both top-4"),
@@ -319,21 +261,6 @@ traded_second <- tribble(
   "UTA", "CLE", 2032, "none", "outright", "CLE 2032 2nd to UTA", NA_character_,
   "ATL", "LAL", 2032, "none", "outright", "LAL 2032 2nd to ATL", NA_character_) %>%
   mutate(round = 2L, complex_group = NA_character_)
-
-make_complex_second_assets <- function(year, group_id, original_teams, possible_owners, notes) {
-  tidyr::expand_grid(owner = possible_owners,
-                     original_team = original_teams) %>%
-    filter(owner != original_team) %>%
-    transmute(owner,
-              original_team,
-              year = as.integer(year),
-              protection = "complex",
-              pick_type = "complex",
-              notes = notes,
-              condition_id = NA_character_,
-              complex_group = group_id,
-              round = 2L)
-}
 
 complex_second_groups <- tribble(~year, ~group_id, ~notes,
                                  2027, "DAL_BKN_WAS_DET_2R", 
@@ -696,46 +623,33 @@ cat(sprintf("Complex future obligation assets encoded: %d rows across %d groups\
 # team's own/retained pick row even when the pick is protected or in a swap pool;
 # the simulation allocator decides which owner actually receives each original
 # pick in each draw. This fixes the previous protected-pick retention bug.
-build_owned_picks <- function() {
-  own_future_r1 <- tidyr::expand_grid(year = FIRST_PROJECTED_DRAFT:LAST_PROJECTED_DRAFT,
-                                      original_team = all_teams) %>%
-    transmute(owner = original_team,
-              original_team,
-              year = as.integer(year),
-              round = 1L,
-              protection = "none",
-              pick_type = "own",
-              notes = "own / retained first-round pick",
-              condition_id = NA_character_,
-              complex_group = NA_character_)
-  
-  own_future_r2 <- tidyr::expand_grid(year = FIRST_PROJECTED_DRAFT:LAST_PROJECTED_DRAFT,
-                                      original_team = all_teams) %>%
-    transmute(owner = original_team,
-              original_team,
-              year = as.integer(year),
-              round = 2L,
-              protection = "none",
-              pick_type = "own",
-              notes = "own / retained second-round pick",
-              condition_id = NA_character_,
-              complex_group = NA_character_)
-  
-  bind_rows(own_future_r1,
-            own_future_r2,
-            traded_future %>% mutate(condition_id = NA_character_),
-            traded_second,
-            swap_return_assets %>% mutate(condition_id = NA_character_),
-            complex_future_assets %>% mutate(condition_id = NA_character_),
-            complex_second_assets) %>%
-    distinct(owner, original_team, year, round, pick_type, complex_group, condition_id, 
-             .keep_all = TRUE)
-}
+own_future <- tidyr::expand_grid(round = 1:2,
+                                 year = FIRST_PROJECTED_DRAFT:LAST_PROJECTED_DRAFT,
+                                 original_team = all_teams) %>%
+  transmute(owner = original_team,
+            original_team,
+            year = as.integer(year),
+            round = as.integer(round),
+            protection = "none",
+            pick_type = "own",
+            notes = if_else(round == 1L,
+                            "own / retained first-round pick",
+                            "own / retained second-round pick"),
+            condition_id = NA_character_,
+            complex_group = NA_character_)
 
-owned_future <- build_owned_picks()
+owned_future <- bind_rows(own_future,
+                          traded_future %>% mutate(condition_id = NA_character_),
+                          traded_second,
+                          swap_return_assets %>% mutate(condition_id = NA_character_),
+                          complex_future_assets %>% mutate(condition_id = NA_character_),
+                          complex_second_assets) %>%
+  distinct(owner, original_team, year, round, pick_type, complex_group, condition_id,
+           .keep_all = TRUE)
 
 
-# PICK-ASSET REGISTRY
+
+### PICK-ASSET REGISTRY ---------------------------------------------------------
 # A single master table of every individual pick asset the dashboard can value:
 #   * the 30 actual 2026 first-round slots (locked), plus
 #   * every owned 2027-2032 pick (traded + own).
@@ -807,7 +721,9 @@ asset_ids  <- pick_assets$asset_id
 cat(sprintf("Pick-asset registry: %d individual assets\n", n_assets))
 
 
-# USER-FACING PICK ENTITLEMENTS (DISPLAY ASSETS)
+
+
+### USER-FACING PICK ENTITLEMENTS (DISPLAY ASSETS) ------------------------------
 # The simulation keeps one internal row per possible owner/original-team outcome
 # so allocations can be resolved cleanly. That is too granular for the app:
 # swap-return legs and retained own-pick rows are mutually exclusive pieces of
@@ -816,56 +732,9 @@ cat(sprintf("Pick-asset registry: %d individual assets\n", n_assets))
 # return-leg rows. The display registry below groups internal assets into the
 # RealGM-style pick entitlements users expect to select.
 
+# Filled by add_display_group() (00_helpers.R)
 pick_display_assets <- tibble()
 pick_display_members <- tibble()
-
-add_display_group <- function(display_asset_id,
-                              year,
-                              owner,
-                              original_teams,
-                              label,
-                              obligation,
-                              notes = obligation,
-                              group_type = "grouped",
-                              draft_round = 1L,
-                              complex_group_filter = NULL,
-                              pick_types = c("own", "swap", "swap_return", "complex")) {
-  members <- pick_assets %>%
-    filter(.data$year == .env$year,
-           .data$round == .env$draft_round,
-           .data$owner == .env$owner,
-           .data$original_team %in% .env$original_teams,
-           .data$pick_type %in% .env$pick_types)
-  
-  if (!is.null(complex_group_filter)) {
-    members <- members %>%
-      filter(.data$complex_group == .env$complex_group_filter |
-               (.data$pick_type == "own" & .data$original_team %in% .env$original_teams))
-  }
-  
-  members <- members %>% distinct(asset_id, .keep_all = TRUE)
-  if (nrow(members) == 0) return(invisible(NULL))
-  
-  pick_display_assets <<- bind_rows(pick_display_assets,
-                                    tibble(display_asset_id = display_asset_id,
-                                           owner = owner,
-                                           year = as.integer(year),
-                                           round = as.integer(draft_round),
-                                           label = label,
-                                           obligation = obligation,
-                                           notes = notes,
-                                           group_type = group_type,
-                                           display_group = complex_group_filter %||% display_asset_id,
-                                           member_n = nrow(members),
-                                           member_original_teams = paste(sort(unique(members$original_team)),
-                                                                         collapse = ", ")))
-  
-  pick_display_members <<- bind_rows(pick_display_members,
-                                     tibble(display_asset_id = display_asset_id,
-                                            asset_id = members$asset_id))
-  
-  invisible(NULL)
-}
 
 # Simple two-team swaps: collapse the holder leg, own row, and return leg into
 # one selectable entitlement per team.

@@ -1,0 +1,302 @@
+{
+  "generated": "2026-10-05T20:55:49-0400",
+  "export_generated": "2026-10-05T20:46:46-0400",
+  "trades": [
+    {
+      "name": "fixed 2026 + ranked pool vs fixed 2026 + grouped",
+      "teamA": "BKN",
+      "teamB": "ATL",
+      "picksA": ["display_2026_R1_BKN_from_BKN_outright", "display_2028_BKN_BKN_PHI_PHX_NYK_WAS_MIL__rank1"],
+      "picksB": ["display_2026_R1_ATL_from_NOP_outright", "display_2027_ATL_MIL_NOP_ATL"],
+      "controls": [],
+      "picks": [
+        {
+          "side": "A",
+          "id": "display_2026_R1_BKN_from_BKN_outright",
+          "convey": 1,
+          "initial": 5.281347,
+          "impact": 0,
+          "final": 5.281347,
+          "final_q10": 4.340616,
+          "final_q90": 6.253153,
+          "outcome": 5.57993321807199
+        },
+        {
+          "side": "A",
+          "id": "display_2028_BKN_BKN_PHI_PHX_NYK_WAS_MIL__rank1",
+          "convey": 1,
+          "initial": 6.51571669,
+          "impact": 0,
+          "final": 6.51571669,
+          "final_q10": 3.497691,
+          "final_q90": 11.51674,
+          "outcome": 9.91014231408142
+        },
+        {
+          "side": "B",
+          "id": "display_2026_R1_ATL_from_NOP_outright",
+          "convey": 1,
+          "initial": 4.633834175,
+          "impact": 0,
+          "final": 4.633834175,
+          "final_q10": 3.833857,
+          "final_q90": 5.448197,
+          "outcome": 4.78138735143924
+        },
+        {
+          "side": "B",
+          "id": "display_2027_ATL_MIL_NOP_ATL",
+          "convey": 0.962,
+          "initial": 3.536018945,
+          "impact": 0,
+          "final": 3.536018945,
+          "final_q10": 2.62148,
+          "final_q90": 4.739284,
+          "outcome": 3.5011995364439
+        }
+      ],
+      "net_ev": {
+        "mean": -3.62721057,
+        "q05": -12.1079605,
+        "q95": -0.120758500000001,
+        "p_pos": 0.038,
+        "p_neg": 0.961
+      },
+      "net_outcome": {
+        "mean": -7.20748864427027,
+        "q05": -36.8032950794901,
+        "q95": 20.8257373774979,
+        "p_pos": 0.335,
+        "p_neg": 0.665
+      },
+      "best": {
+        "p_A": 0.334,
+        "p_B": 0.666,
+        "ci_A": [0.316923840933165, 0.351596245558092],
+        "ci_B": [0.648403754441908, 0.683076159066835],
+        "edge_mean": -4.69405212888232
+      }
+    },
+    {
+      "name": "R1 top-4 protection vs R1 swap right",
+      "teamA": "ATL",
+      "teamB": "BKN",
+      "picksA": "display_2029_R1_ATL_from_ATL_own",
+      "picksB": "display_2027_R1_BKN_from_NYK_outright",
+      "controls": {
+        "prot_A_display_2029_R1_ATL_from_ATL_own": "top4",
+        "swap_B_display_2027_R1_BKN_from_NYK_outright": true
+      },
+      "picks": [
+        {
+          "side": "A",
+          "id": "display_2029_R1_ATL_from_ATL_own",
+          "convey": 0.879,
+          "initial": 4.319139875,
+          "impact": -1.16553148,
+          "final": 3.153608395,
+          "final_q10": 0,
+          "final_q90": 4.673108,
+          "outcome": 3.07133060481047
+        },
+        {
+          "side": "B",
+          "id": "display_2027_R1_BKN_from_NYK_outright",
+          "convey": 0.356,
+          "initial": 3.575218445,
+          "impact": -3.11367383,
+          "final": 0.461544615,
+          "final_q10": 0,
+          "final_q90": 1.059802,
+          "outcome": 0.379447740152841
+        }
+      ],
+      "net_ev": {
+        "mean": -2.69206378,
+        "q05": -5.0833885,
+        "q95": 0.402167,
+        "p_pos": 0.071,
+        "p_neg": 0.848
+      },
+      "net_outcome": {
+        "mean": -2.69188286465763,
+        "q05": -17.815855368384,
+        "q95": 9.97505217441525,
+        "p_pos": 0.3545,
+        "p_neg": 0.5645
+      },
+      "best": {
+        "p_A": 0.3545,
+        "p_B": 0.5645,
+        "ci_A": [0.337145070398808, 0.372310789103198],
+        "ci_B": [0.546175351672438, 0.582622565682543],
+        "edge_mean": -2.69188286465763
+      }
+    },
+    {
+      "name": "R1 top-10 protection and swap together, plus R2 protections",
+      "teamA": "ATL",
+      "teamB": "BKN",
+      "picksA": ["display_2030_R1_ATL_from_ATL_own", "display_2027_R2_ATL_from_ATL_own"],
+      "picksB": "display_2027_R2_BKN_from_LAL_conditional",
+      "controls": {
+        "prot_A_display_2030_R1_ATL_from_ATL_own": "top10",
+        "swap_A_display_2030_R1_ATL_from_ATL_own": true,
+        "prot_A_display_2027_R2_ATL_from_ATL_own": "protected31_45",
+        "prot_B_display_2027_R2_BKN_from_LAL_conditional": "protected31_55",
+        "swap_B_display_2027_R2_BKN_from_LAL_conditional": true
+      },
+      "picks": [
+        {
+          "side": "A",
+          "id": "display_2030_R1_ATL_from_ATL_own",
+          "convey": 0.1925,
+          "initial": 4.412455885,
+          "impact": -4.33471661,
+          "final": 0.077739275,
+          "final_q10": 0,
+          "final_q90": 0.275016000000001,
+          "outcome": 0.0297650471685224
+        },
+        {
+          "side": "A",
+          "id": "display_2027_R2_ATL_from_ATL_own",
+          "convey": 0.6155,
+          "initial": 0.6887181503335,
+          "impact": -0.4077524975,
+          "final": 0.2809656528335,
+          "final_q10": 0,
+          "final_q90": 0.697804,
+          "outcome": 0.326245457284772
+        },
+        {
+          "side": "B",
+          "id": "display_2027_R2_BKN_from_LAL_conditional",
+          "convey": 0.0165,
+          "initial": 0.564564781125,
+          "impact": -0.56360995555,
+          "final": 0.000954825575,
+          "final_q10": 0,
+          "final_q90": 0,
+          "outcome": 0.0183467799263465
+        }
+      ],
+      "net_ev": {
+        "mean": -0.3577501022585,
+        "q05": -1.0410578,
+        "q95": 0,
+        "p_pos": 0.0095,
+        "p_neg": 0.6775
+      },
+      "net_outcome": {
+        "mean": -0.337663724526948,
+        "q05": -7.8039083723893,
+        "q95": 4.39893236406341,
+        "p_pos": 0.318,
+        "p_neg": 0.2445
+      },
+      "best": {
+        "p_A": 0.0325,
+        "p_B": 0.259,
+        "ci_A": [0.0266804372650183, 0.0397838760794956],
+        "ci_B": [0.243272496241471, 0.27548256380682],
+        "edge_mean": -1.09650535125291
+      }
+    },
+    {
+      "name": "one-sided: a single future pick",
+      "teamA": "BKN",
+      "teamB": "ATL",
+      "picksA": "display_2027_R1_BKN_from_NYK_outright",
+      "picksB": [],
+      "controls": [],
+      "picks": [
+        {
+          "side": "A",
+          "id": "display_2027_R1_BKN_from_NYK_outright",
+          "convey": 1,
+          "initial": 3.575218445,
+          "impact": 0,
+          "final": 3.575218445,
+          "final_q10": 2.458482,
+          "final_q90": 4.609154,
+          "outcome": 3.36516793750856
+        }
+      ],
+      "net_ev": {
+        "mean": -3.575218445,
+        "q05": -6.065422,
+        "q95": -2.230163,
+        "p_pos": 0,
+        "p_neg": 1
+      },
+      "net_outcome": {
+        "mean": -3.36516793750856,
+        "q05": -16.0119312355762,
+        "q95": 4.34870015932478,
+        "p_pos": 0.342,
+        "p_neg": 0.658
+      },
+      "best": {
+        "p_A": 0,
+        "p_B": 1,
+        "ci_A": [2.56335017348159e-05, 0.00149599745652109],
+        "ci_B": [0.998504002543479, 0.999974366498265],
+        "edge_mean": -3.36516793750856
+      }
+    },
+    {
+      "name": "existing swap entitlement vs plain future pick",
+      "teamA": "BKN",
+      "teamB": "ATL",
+      "picksA": "display_2027_BKN_swap_return_HOU_BKN",
+      "picksB": "display_2027_R2_ATL_from_ATL_own",
+      "controls": [],
+      "picks": [
+        {
+          "side": "A",
+          "id": "display_2027_BKN_swap_return_HOU_BKN",
+          "convey": 1,
+          "initial": 1.40990248,
+          "impact": 0,
+          "final": 1.40990248,
+          "final_q10": 0,
+          "final_q90": 7.129546,
+          "outcome": 1.47467088943708
+        },
+        {
+          "side": "B",
+          "id": "display_2027_R2_ATL_from_ATL_own",
+          "convey": 1,
+          "initial": 0.6887181503335,
+          "impact": 0,
+          "final": 0.6887181503335,
+          "final_q10": 0.215118,
+          "final_q90": 1.27819,
+          "outcome": 0.740141037275959
+        }
+      ],
+      "net_ev": {
+        "mean": -0.7211843296665,
+        "q05": -7.65506315,
+        "q95": 1.475362,
+        "p_pos": 0.8055,
+        "p_neg": 0.1945
+      },
+      "net_outcome": {
+        "mean": -0.734529852161123,
+        "q05": -13.3829958482303,
+        "q95": 9.11468419706152,
+        "p_pos": 0.328,
+        "p_neg": 0.5145
+      },
+      "best": {
+        "p_A": 0.328,
+        "p_B": 0.5145,
+        "ci_A": [0.311012311428254, 0.34552657315191],
+        "ci_B": [0.496108083576925, 0.53284648696266],
+        "edge_mean": -0.734529852161123
+      }
+    }
+  ]
+}
