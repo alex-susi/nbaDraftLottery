@@ -9,8 +9,9 @@
 #     core.bin         per-simulation pick-value curves (mu_1..mu_60) and
 #                      projected team slots for both rounds
 #     teams/<ABB>.bin  draws for the picks each team owns, loaded on demand
-#     methodology.json tables behind the Methodology tab's charts, plus its
-#                      value-metric text and validation table as app.R renders them
+#     methodology.json tables behind the Methodology tab's charts, the numbers
+#                      in its Value Metric text, and the validation table as
+#                      app.R renders it
 #     summary.json     Summary tab numbers, team portfolios for every year /
 #                      round filter, per-pick EPV changes, and the team table
 #     single/<ABB>.json Single pick details and density curves for each pick a
@@ -198,15 +199,15 @@ write_json(meta, file.path(out_dir, "meta.json"), auto_unbox = TRUE, digits = NA
 
 # ---- methodology.json ----------------------------------------------------------
 # Chart tables come from the objects and helpers the Methodology tab plots. The
-# value-metric text and validation table are read from app.R's rendered output
-# so their wording, checks, and PASS / CHECK badges stay identical.
+# validation table is read from app.R's rendered output so its checks and
+# PASS / CHECK badges stay identical. The Value Metric and glossary wording
+# lives in web/src/pages/Methodology.svelte; only its numbers are exported here,
+# with the same fallbacks as output$method_value_metric.
 rendered <- NULL
 testServer(a$server, {
-  rendered <<- list(value_metric = output$method_value_metric$html,
-                    validation = output$validation_panel$html)
+  rendered <<- list(validation = output$validation_panel$html)
 })
-value_metric_doc <- read_html(as.character(rendered$value_metric))
-validation_doc   <- read_html(as.character(rendered$validation))
+validation_doc <- read_html(as.character(rendered$validation))
 
 validation_rows <- xml_find_all(validation_doc, "//tbody/tr") %>%
   map(~ set_names(as.list(xml_text(xml_find_all(.x, "./td"), trim = TRUE)),
@@ -216,8 +217,10 @@ rank_display <- a$rank_display_matrix(a$rank_trans_mat)
 tier_mat     <- a$trans_mat
 
 methodology <- list(
-  value_metric_paragraphs = xml_text(xml_find_all(value_metric_doc, "//p"), trim = TRUE),
-  value_metric_desc = a$VALUE_METRIC_DESC,
+  value_metric = list(is_xrapm = a$value_metric_is_xrapm,
+                      draft_years = as.integer(a$dd$metadata$fit_draft_years %||% c(1996, 2022)),
+                      replacement = a$dd$metadata$xrapm_replacement %||% -2,
+                      points_per_win = a$dd$metadata$points_per_win %||% 30.4),
   value_outcome = a$VALUE_OUTCOME,
   pick_curve = a$pick_curve %>%
     filter(.data$pick >= 1, .data$pick <= 60) %>%

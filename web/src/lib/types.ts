@@ -213,8 +213,13 @@ export interface ValidationRow {
 }
 
 export interface Methodology {
-  value_metric_paragraphs: string[];
-  value_metric_desc: string;
+  // Numbers filled into the Value Metric and glossary text in Methodology.svelte.
+  value_metric: {
+    is_xrapm: boolean;
+    draft_years: [number, number];
+    replacement: number;
+    points_per_win: number;
+  };
   value_outcome: string;
   pick_curve: PickCurveRow[];
   tier_matrix: { from: string[]; to: string[]; pct: number[][] };

@@ -14,6 +14,9 @@
   let interval = $state<IntervalChoice>("10_90");
 
   const rankChoices = Array.from({ length: 30 }, (_, i) => i + 1);
+
+  // One decimal, as in the model export (e.g. -2.0, 30.4).
+  const f1 = (x: number) => x.toFixed(1);
 </script>
 
 {#await load}
@@ -25,47 +28,56 @@
   {@const lotLine = lotteryLineFigure(m)}
   {@const lotBar = lotteryBarFigure(m)}
   {@const horizon = rankHorizonFigure(m, startRank === "all" ? "all" : Number(startRank), interval)}
+  {@const vm = m.value_metric}
   {@const glossary = [
-    ["EPV", `Expected Pick Value; the expected ${m.value_outcome} for a draft asset.`],
-    [m.value_outcome, `${m.value_metric_desc}.`],
+    ["EPV", `Expected Pick Value: the average ${m.value_outcome} for a draft asset.`],
+    [m.value_outcome, vm.is_xrapm
+      ? `xRAPM wins above replacement (${f1(vm.replacement)} baseline) over the four rookie-contract seasons after the draft.`
+      : "Basketball-Reference Win Shares over a player's first four NBA seasons."],
     ["Replacement level", "The level of a freely available player (minimum salary or outside a normal rotation): -2.0 points per 100 possessions relative to league average. Playing time below it subtracts value."],
     ["Conveyance", "Whether a traded pick actually transfers to the receiving team after protections and conditions are applied."],
     ["Protection", "A condition that lets the original team keep the pick in certain ranges, such as top-4 or lottery protected."],
     ["Swap right", "The right to exchange picks with another team when the swap holder's outcome is better."],
-    ["Relegation", "The three worst teams overall; under 3-2-1 they receive two lottery balls and cannot fall past pick 12."],
-    ["Non-Play-In", "Non-relegated teams that miss the play-in; under 3-2-1 they receive three balls."],
-    ["9/10 Seeds", "The four conference 9- and 10-seeds; under 3-2-1 they receive two balls."],
-    ["7v8 Losers", "The two teams that lose the 7-vs-8 play-in games; under 3-2-1 they receive one ball."],
+    ["Relegation", "The three worst teams overall. Under 3-2-1 they receive two lottery balls and cannot fall past pick 12."],
+    ["Non-Play-In", "Non-relegated teams that miss the play-in. Under 3-2-1 they receive three balls."],
+    ["9/10 Seeds", "The four conference 9- and 10-seeds. Under 3-2-1 they receive two balls."],
+    ["7v8 Losers", "The two teams that lose the 7-vs-8 play-in games. Under 3-2-1 they receive one ball."],
     ["Playoff", "The 14 playoff teams, ordered after the lottery teams for draft-position purposes."],
   ]}
 
   <div class="sections">
     <details open>
-      <summary>How the valuation works</summary>
+      <summary>Methodology Overview</summary>
       <div class="body grid3">
         <section class="card method-card">
           <h3 class="card-header">Expected Pick Value</h3>
           <div class="card-body">
-            <p>Expected Pick Value (EPV) is the expected value of a draft asset before the player is known. Every future pick is run through simulated team trajectories, lottery draws, protections, swaps and conveyance rules, and the resulting draft slot is valued with a Bayesian pick-value curve. EPV separates the value of the asset from the luck of any one player's career.</p>
+            <p>Expected Pick Value (EPV) is the expected value of a draft asset before the player is known. Every future pick is run through simulated team trajectories, lottery draws, protections, swaps and conveyance rules, and the resulting draft slot is valued with a Bayesian pick-value curve. EPV separates the value of the asset from the outcome of any one player's career.</p>
           </div>
         </section>
         <section class="card method-card">
           <h3 class="card-header">Value Metric</h3>
           <div class="card-body">
-            {#each m.value_metric_paragraphs as p}<p>{p}</p>{/each}
+            <!-- Edit the wording freely. Values in {braces} come from the model export. -->
+            {#if vm.is_xrapm}
+              <p>Picks are valued by what players drafted in each slot produced during their rookie contracts: xRAPM wins above replacement over the four seasons after the draft ({vm.draft_years[0]}-{vm.draft_years[1]} draft classes). Seasons a player misses count as zero.</p>
+              <p>xRAPM (xrapm.com) is a plus-minus rating that combines lineup data with a box-score and play-by-play prior. Each season's value is (xRAPM + {f1(-vm.replacement)}) × possessions ÷ 100 ÷ {f1(vm.points_per_win)} points per win, so a {f1(vm.replacement)} player (about the level of a minimum-salary or end-of-rotation player) adds nothing. Lockout and COVID seasons are scaled to 82 games.</p>
+            {:else}
+              <p>Picks are valued by Basketball-Reference Win Shares over each player's first four NBA seasons.</p>
+            {/if}
           </div>
         </section>
         <section class="card method-card">
           <h3 class="card-header">The 3-2-1 Rule</h3>
           <div class="card-body">
-            <p>The 3-2-1 system gives 16 teams lottery balls by competitive tier: three balls for non-play-in teams, two for the three relegation teams and the 9/10 play-in seeds, and one for the 7v8 play-in losers. The model also applies the anti-tank rules and the relegation floor, then compares each team's portfolio against the current lottery on the same simulated seasons.</p>
+            <p>The 3-2-1 system gives 16 teams lottery balls by competitive tier: three balls for non-play-in teams, two for the three relegation teams and the 9/10 play-in seeds, and one for the 7v8 play-in losers. The model also applies the anti-tank rules and the relegation floor, then compares each team's portfolio against simulated outcomes from the old lottery rules on the same projected seasons.</p>
           </div>
         </section>
       </div>
     </details>
 
     <details open>
-      <summary>Draft pick value curve</summary>
+      <summary>Draft Pick Value Curve</summary>
       <div class="body">
         <section class="card chart-card">
           <PlotlyChart data={curve.data} layout={curve.layout} height={(w) => (w < 640 ? 520 : 440)}
@@ -75,11 +87,11 @@
     </details>
 
     <details>
-      <summary>Team-strength model</summary>
+      <summary>Team-strength Model</summary>
       <div class="body grid2">
         <section class="card">
           <div class="card-header with-controls">
-            <h3>Team-Strength Transition Matrix</h3>
+            <h3>Transition Matrix</h3>
             <select class="select compact" bind:value={matrixType} aria-label="Matrix type">
               <option value="tier">Tier Matrix</option>
               <option value="rank">30 Rank</option>
@@ -116,7 +128,7 @@
     </details>
 
     <details>
-      <summary>Lottery odds</summary>
+      <summary>Lottery Odds</summary>
       <div class="body grid2">
         <section class="card">
           <h3 class="card-header">Expected Pick Position by Lottery Seed</h3>
@@ -132,7 +144,7 @@
     </details>
 
     <details>
-      <summary>Model validation &amp; diagnostics</summary>
+      <summary>Model Validation &amp; Diagnostics</summary>
       <div class="body">
         <div class="validation" role="table" aria-label="Model validation checks">
           <div class="v-row v-head" role="row">

@@ -10,6 +10,7 @@
   import { singlePickFigure } from "../lib/teamCharts";
   import type { ProbSummary, SinglePick, Summary, SummaryTeam } from "../lib/types";
   import PlotlyChart from "./PlotlyChart.svelte";
+  import TeamSelect from "./TeamSelect.svelte";
   import TeamTag from "./TeamTag.svelte";
 
   let { s, teams }: { s: Summary; teams: Map<string, SummaryTeam> } = $props();
@@ -79,11 +80,11 @@
         {#each s.years as y}<option value={y}>{y}</option>{/each}
       </select>
     </label>
-    <label>Team
-      <select class="select" bind:value={team}>
-        {#each teamList as t}<option value={t}>{t} · {teams.get(t)?.name}</option>{/each}
-      </select>
-    </label>
+    <div class="field">
+      <span id="sp-team-label">Team</span>
+      <TeamSelect id="sp-team" labelledby="sp-team-label" teams={teamList.map((t) => teams.get(t)!)}
+                  value={team} onchange={(abbr) => (team = abbr)} />
+    </div>
     <label>Pick
       <select class="select" bind:value={pickId} disabled={options.length === 0}>
         {#each options as o (o.id)}<option value={o.id}>{o.short_label}</option>{/each}
@@ -184,7 +185,8 @@
 <style>
   .layout { display: grid; grid-template-columns: minmax(280px, 500px) minmax(0, 1fr); gap: 14px; align-items: start; }
   .sidebar { display: flex; flex-direction: column; gap: 14px; padding: 16px; min-width: 0; }
-  .sidebar label { display: flex; flex-direction: column; gap: 6px; font-weight: 700; color: #cfd2dc; }
+  .sidebar label, .field { display: flex; flex-direction: column; gap: 6px; font-weight: 700; color: #cfd2dc; }
+  .field :global(.team-select) { font-weight: 400; color: var(--text); }
   .main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
   h3 { margin: 0; font-size: 14px; }
   hr { border: 0; border-top: 1px solid var(--border); margin: 2px 0; width: 100%; }

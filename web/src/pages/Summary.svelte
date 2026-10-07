@@ -30,7 +30,7 @@
 
   <div class="summary">
     <section class="hero">
-      <h2>What the 3-2-1 lottery does to draft-pick value</h2>
+      <h2>The Impact of the 3-2-1 Lottery on Draft Pick Valuations</h2>
       <p class="headline">
         Under the 3-2-1 lottery, the <b>{gain?.name}</b> gain the most pick value
         (<b>{fmtSigned1(s.gain.delta)} EPV</b>, ahead in {pct0(s.gain.p_positive)} of simulations)
@@ -39,7 +39,7 @@
         total, and <b>{s.n_moved} of {s.n_future}</b> future picks change in value by 5% or more.
       </p>
       <p class="note">
-        Expected pick value (EPV) is the expected {s.value_metric_desc}. Current = the legacy 14-team lottery;
+        Expected Pick Value (EPV) is the expected {s.value_metric_desc}. Current = the legacy 14-team lottery;
         3-2-1 = the approved format, compared on the same simulated seasons. 2026 picks are locked to the actual
         draft order. See <a href="#/methodology">Methodology</a> or the
         <a href="https://github.com/alex-susi/nbaDraftLottery" target="_blank" rel="noopener noreferrer">GitHub repo</a>
@@ -102,7 +102,7 @@
       </section>
 
       <section class="card">
-        <h3 class="card-header">Biggest pick movers</h3>
+        <h3 class="card-header">Most Affected Picks</h3>
         <div class="card-body movers">
           <table>
             <thead>
@@ -131,7 +131,7 @@
     </div>
 
     <details class="more">
-      <summary>All picks, sorted by change in EPV</summary>
+      <summary>All Picks, sorted by change in EPV</summary>
       <div class="more-body">
         <AllPicksTable picks={s.picks} {teams} years={s.years} />
       </div>

@@ -5,6 +5,7 @@
   import { deltaColor, fmt1, fmtDelta1, pctChange } from "../lib/format";
   import { pickHref } from "../lib/router.svelte";
   import type { PickRow, SummaryTeam } from "../lib/types";
+  import TeamSelect from "./TeamSelect.svelte";
   import TeamTag from "./TeamTag.svelte";
 
   let { picks, teams, years }: { picks: PickRow[]; teams: Map<string, SummaryTeam>; years: number[] } = $props();
@@ -75,12 +76,12 @@
       <option value="2">Round 2</option>
     </select>
   </label>
-  <label>Team
-    <select class="select" bind:value={team}>
-      <option value="All">All teams</option>
-      {#each owners as o}<option value={o}>{o} · {teams.get(o)?.name ?? o}</option>{/each}
-    </select>
-  </label>
+  <div class="field">
+    <span id="pm-team-label">Team</span>
+    <TeamSelect id="pm-team" labelledby="pm-team-label" allLabel="All teams"
+                teams={owners.map((o) => teams.get(o) ?? { abbr: o, name: o, logo: null })}
+                value={team} onchange={(abbr) => (team = abbr)} />
+  </div>
   <button type="button" class="btn small" onclick={() => { year = "All"; round = "All"; team = "All"; sortKey = null; }}>
     Clear filters
   </button>
@@ -120,7 +121,9 @@
 
 <style>
   .filters { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 12px; }
-  .filters label { display: flex; flex-direction: column; gap: 6px; width: 190px; font-weight: 700; color: #cfd2dc; }
+  .filters label, .filters .field { display: flex; flex-direction: column; gap: 6px; width: 190px; font-weight: 700; color: #cfd2dc; }
+  .filters .field { width: 240px; }
+  .field :global(.team-select) { font-weight: 400; color: var(--text); }
   .btn.small { min-height: 38px; padding: 6px 14px; font-size: 13px; }
   .wrap { max-height: 560px; overflow: auto; container-type: inline-size; border-top: 1px solid var(--border); }
   table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; }
@@ -162,6 +165,6 @@
     td, th button { padding-left: 5px; padding-right: 5px; }
   }
   @media (max-width: 560px) {
-    .filters label { width: calc(50% - 6px); }
+    .filters label, .filters .field { width: calc(50% - 6px); }
   }
 </style>

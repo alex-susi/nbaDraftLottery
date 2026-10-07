@@ -8,6 +8,7 @@
   import DensityChart from "./DensityChart.svelte";
   import PickSelect from "./PickSelect.svelte";
   import PickTable from "./PickTable.svelte";
+  import TeamSelect from "./TeamSelect.svelte";
 
   // The context is created once at load and never replaced.
   let { ctx }: { ctx: TradeContext } = $props();
@@ -103,13 +104,9 @@
           <div class="team-name">{team.name}</div>
         </div>
         <div class="controls">
-          <label class="label" for={`team-${side}`}>{title}</label>
-          <select id={`team-${side}`} class="select" value={team.abbr}
-                  onchange={(e) => setTeam(side, e.currentTarget.value)}>
-            {#each meta.teams as t (t.abbr)}
-              <option value={t.abbr}>{t.abbr} · {t.name}</option>
-            {/each}
-          </select>
+          <span class="label" id={`team-${side}-label`}>{title}</span>
+          <TeamSelect id={`team-${side}`} labelledby={`team-${side}-label`} teams={meta.teams}
+                      value={team.abbr} onchange={(abbr) => setTeam(side, abbr)} />
           <PickSelect id={`picks-${side}`} label={`Picks ${team.abbr} sends out`}
                       options={ownedBy(team.abbr)} selected={picks}
                       onchange={(ids) => (side === "A" ? (picksA = ids) : (picksB = ids))} />
