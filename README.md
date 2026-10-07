@@ -1,4 +1,4 @@
-# Probabilistic NBA Draft Pick Valuations Under the New 3-2-1 Lottery
+# Probabilistic Valuations of NBA Draft Picks Under the New 3-2-1 Lottery
 
 [![Dashboard](https://img.shields.io/badge/Interactive%20Dashboard-Shiny-blue)](https://alexsusi2298.shinyapps.io/nbaDraftLottery/)
 [![R](https://img.shields.io/badge/R-Shiny%20%7C%20Stan-276DC3)](https://www.r-project.org/)
@@ -20,9 +20,9 @@ The **[Interactive Dashboard](https://alex-susi.github.io/nbaDraftLottery/)** in
 
 | Tab            | Use case                                                                     |
 | -------------- | ---------------------------------------------------------------------------- |
-| Summary        | The answer first: who gains and loses pick value under 3-2-1, by how much, and which picks move most |
-| Team           | Team portfolios (all 30 teams with detail), the pick landscape (quality vs quantity), and single-pick distributions |
-| Trade Machine  | Evaluate a real or hypothetical transaction, led by a one-line verdict          |
+| Summary        | Which teams gain and lose the most pick value under 3-2-1, by how much, and which picks move most |
+| Team           | Team portfolios, the pick landscape (quality vs quantity), and single-pick value distributions |
+| Trade Machine  | Evaluate a real or hypothetical transaction          |
 | Methodology    | Valuation overview, pick-value curve, team-strength model, lottery odds, validation, and glossary |
 
 
@@ -73,7 +73,7 @@ Trade Machine
 
 1. **Draft Pick Value Curves**
 
-   * First-round picks are modeled with a Bayesian curve on draft slot that is strictly decreasing: an earlier pick is always worth more, and the uncertainty is in how much more. Player outcomes follow a right-skewed (ex-Gaussian) distribution whose spread and skew are smoothed across neighboring picks.
+   * First-round picks are modeled with a Bayesian curve on draft slot that is strictly decreasing. An earlier pick is always worth more, but the uncertainty is in how much more. Player outcomes follow a right-skewed (ex-Gaussian) distribution whose spread and skew are smoothed across neighboring picks.
    * Second-round picks are modeled separately using a hurdle model because many second-rounders never appear in an NBA game.
 
 2. **Projecting Future Team Performance**
@@ -84,8 +84,8 @@ Trade Machine
 
    * For 2027-2032, a Monte Carlo simulation projects future team standings, and runs both the current lottery and the new 3-2-1 system.
    * It applies the appropriate number of lottery balls based on tier, the 12th-pick floor, no consecutive No. 1 picks, no three straight top-5 picks, and the ban on newly traded top-12 through top-15 protections.
-   * The simulation applies future pick obligations, protections, swaps, conveyance rules, return legs, and conditional structures.
-   * The trade machine evaluates hypothetical pick packages using correlated simulation draws, so team trajectories and pick outcomes remain internally consistent.
+   * The simulation applies future pick obligations, protections, and swap rights.
+   * The trade machine evaluates hypothetical pick trades using correlated simulation draws, so team trajectories and pick outcomes remain internally consistent.
 
 
 <br>
